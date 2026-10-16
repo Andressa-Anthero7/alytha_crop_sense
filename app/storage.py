@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from .catalog_search import extract_geometry
+from . import migrations
 
 DB_PATH = Path(__file__).resolve().parents[1] / 'data' / 'monitoring.sqlite3'
 
@@ -12,28 +13,10 @@ DB_PATH = Path(__file__).resolve().parents[1] / 'data' / 'monitoring.sqlite3'
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH, timeout=15)
-    connection.row_factory = sqlite3.Row
-    connection.execute('PRAGMA foreign_keys=ON')
-    connection.executescript('''
-        CREATE TABLE IF NOT EXISTS areas (
-            id INTEGER PRIMARY KEY, name TEXT NOT NULL, municipality TEXT NOT NULL,
-            crop TEXT NOT NULL, season TEXT NOT NULL, geometry TEXT NOT NULL, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS analyses (
-            id INTEGER PRIMARY KEY, area_id INTEGER NOT NULL REFERENCES areas(id),
-            kind TEXT NOT NULL, parameters TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS source_snapshots (
-            cache_key TEXT PRIMARY KEY, result TEXT NOT NULL, fetched_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS field_events (
-            id INTEGER PRIMARY KEY, dataset_id TEXT NOT NULL, area_key TEXT NOT NULL,
-            date_from TEXT NOT NULL,date_to TEXT NOT NULL,stage TEXT NOT NULL,note TEXT NOT NULL,created_at TEXT NOT NULL
-        );
-    ''')
-    if 'provenance' not in {row['name'] for row in connection.execute('PRAGMA table_info(areas)')}:
-        connection.execute("ALTER TABLE areas ADD COLUMN provenance TEXT NOT NULL DEFAULT '{}'")
     try:
+        connection.row_factory = sqlite3.Row
+        connection.execute('PRAGMA foreign_keys=ON')
+        migrations.ensure(connection, DB_PATH)
         with connection:
             yield connection
     finally:

@@ -42,7 +42,7 @@ def focus(question):
 
 def reply(intent, grounded):
     evidence=grounded['evidence'];mapping=grounded.get('map',{})
-    city=mapping.get('municipality_name') or 'a cidade pesquisada'
+    city=mapping.get('municipality_name') or mapping.get('state_name') or 'a cidade pesquisada'
     if intent['kind']=='crop_map':
         labels=[mapping['crop_classes'][str(code)] for code in intent['class_ids']]
         return {'answer':f"Vou destacar as áreas mapeadas com {', '.join(labels).lower()} em {city} ({mapping['year']}).",

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coleta Centro-Oeste · Alytha</title>
+  <link rel="stylesheet" href="/coleta.css">
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+  <script src="/vendor/leaflet/leaflet.js" defer></script>
+  <script src="/coleta-filter.js" defer></script>
+  <script src="/coleta-map.js" defer></script>
+  <script src="/coleta.js" defer></script>
+  <script src="/regional-learning.js" defer></script>
+</head>
+<body>
+  <header><a href="/" aria-label="Voltar ao mapa"><img src="/alytha-logo.png" alt="Alytha"></a><span>BASE DE DESENVOLVIMENTO</span><a href="/">Abrir mapa ↗</a></header>
+  <main>
+    <div class="heading"><div><p class="eyebrow">OBSERVATÓRIO DA COLETA</p><h1>Centro-Oeste, em construção.</h1><p class="subtitle">Veja os dados chegando, município por município.</p></div><div class="connection" id="connection" role="status">Conectando…</div></div>
+    <p id="warning" class="warning" role="alert" hidden></p>
+    <section class="live-now" aria-label="Atividade ao vivo"><div class="live-heading"><span class="eyebrow">AGORA NA COLETA</span><span id="next-refresh">Atualizando…</span></div><div id="live-cities" aria-live="polite">Carregando cidades em processamento…</div><p class="live-note">“Parado” indica falta de atualização ou de avanço registrado; a fonte pode ainda estar processando.</p></section>
+    <section class="overview" aria-label="Progresso geral">
+      <div class="overview-top"><div><span class="eyebrow">MUNICÍPIOS PROCESSADOS</span><div class="big"><strong id="processed">—</strong><span id="total">/ —</span></div></div><div class="overall-percent" id="percentage">—</div></div>
+      <div class="track"><div id="overall-bar" class="fill" role="progressbar" aria-label="Municípios processados" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div>
+      <div class="overview-bottom"><p id="summary">Carregando progresso salvo…</p><span id="updated">—</span></div>
+    </section>
+    <section class="stats" aria-label="Resultados"><div><i class="dot green"></i><strong id="ready">—</strong><span>Completos</span></div><div><i class="dot amber"></i><strong id="partial">—</strong><span>Parciais</span></div><div><i class="dot red"></i><strong id="errors">—</strong><span>Com falha</span></div><div><i class="dot gray"></i><strong id="pending">—</strong><span>Aguardando conclusão</span></div></section>
+    <section id="regional-learning-panel" class="overview" aria-label="Base regional e revisão da Alytha">
+      <h2>Base integrada · aprendizado e Alytha</h2>
+      <p id="regional-base-status" role="status">Verificando a base consolidada…</p>
+      <button id="build-regional-base" type="button">Consolidar dados já coletados</button>
+      <p id="regional-ai-status" role="status">A IA analisa a base depois da consolidação.</p>
+      <p id="regional-visual-status" role="status">Preparando a fila visual dos recortes.</p>
+      <button id="toggle-regional-ai" type="button" disabled>Iniciar análises da Alytha sobre esta base</button>
+      <p>Inclui cidades com dados parciais e registra as que ainda não têm leituras. A consolidação usa a base local; não precisa baixar novas imagens. Hipóteses da IA ficam separadas dos registros de campo.</p>
+      <p id="regional-base-downloads" hidden><a href="/api/regional-learning/files/manifest.json" download>Inventário completo</a> · <a href="/api/regional-learning/files/observacoes.csv" download>Observações</a> · <a href="/api/regional-learning/files/janelas_ml.csv" download>Janelas de ML</a> · <a href="/api/regional-learning/files/registros_campo.json" download>Registros de campo</a></p>
+      <label>Buscar na base integrada <input id="regional-base-filter" type="search" placeholder="Município ou UF"></label>
+      <p id="regional-base-count" role="status"></p>
+      <div class="table-wrap"><table><thead><tr><th>Município</th><th>Dados disponíveis</th><th>Recortes com leituras</th><th>Janelas de ML</th><th>Alytha</th></tr></thead><tbody id="regional-base-cities"></tbody></table></div>
+    </section>
+    <section class="collection-filters" aria-label="Filtros da coleta"><label>Situação<select id="collection-status-filter"><option value="all">Todas</option><option value="partial">Todos os parciais</option><option value="partial_25">Parcial: até 25%</option><option value="partial_50">Parcial: >25% a 50%</option><option value="partial_75">Parcial: >50% a 75%</option><option value="partial_100">Parcial: >75%</option><option value="partial_unknown">Parcial: histórico não avaliado</option><option value="error">Com falha</option><option value="loading">Carregando</option><option value="ready">Completos</option><option value="queued">Na fila</option></select></label><label>Causa ou pendência<select id="collection-cause-filter"><option value="all">Todas as causas</option></select></label><label>Treinamento<select id="collection-training-filter"><option value="all">Todos os munic&#237;pios</option><option value="trained">Com modelo treinado</option><option value="pending">Sem modelo registrado</option></select></label><label>Município ou UF<input id="collection-name-filter" type="search" placeholder="Ex.: Dourados ou MS"></label><p id="collection-filter-count" role="status"></p></section>
+    <div class="section-heading"><h2>Mapa da coleta</h2><button id="collection-map-fit" type="button">Ver Centro-Oeste</button></div>
+    <section class="collection-map-card"><label class="collection-map-mode">Colorir mapa por<select id="collection-map-mode"><option value="training">Dados usados no treinamento</option><option value="progress">Andamento da coleta</option></select></label><p id="collection-training-summary" role="status">Verificando modelos treinados?</p><div id="collection-map" aria-label="Mapa de progresso municipal"></div><div id="collection-training-legend" class="collection-map-legend"><span><i style="background:#7652b3"></i>Com modelo treinado</span><span><i style="background:#d5ddd3"></i>Sem modelo registrado</span></div><div id="collection-progress-legend" class="collection-map-legend" hidden><span><i style="background:#278253"></i>Completo</span><span><i style="background:#ffd600"></i>Parcial ≤25%</span><span><i style="background:#d6ad5c"></i>Parcial >25–50%</span><span><i style="background:#b9c97c"></i>Parcial >50–75%</span><span><i style="background:#79b399"></i>Parcial >75%</span><span><i style="background:#c89c4b"></i>Histórico não avaliado</span><span><i style="background:#3284bc"></i>Carregando</span><span><i style="background:#ff0000"></i>Falha</span><span><i style="background:#c4cec2"></i>Na fila</span></div><p>Faixas: anos com leituras / anos previstos no histórico. Não representam acurácia, área plantada nem completude das outras fontes. Um município pode ter histórico 100% e continuar parcial por outra pendência.</p><p id="collection-map-status" role="status">Carregando limites municipais…</p><p id="collection-map-detail">Clique em um município para acompanhar a coleta.</p></section>
+    <div class="section-heading"><h2>Por estado</h2><span>Fila compartilhada · duas regiões por vez</span></div>
+    <section id="states" class="states" aria-label="Progresso por estado"></section>
+    <div class="section-heading"><h2>Municípios e pendências</h2><span>Lista e mapa usam os mesmos filtros</span></div>
+    <section class="table-wrap"><table><thead><tr><th>Município</th><th>Situação</th><th>Recortes recentes</th><th>Leituras históricas</th><th>Treinamento</th><th>Causa / etapa</th></tr></thead><tbody id="recent"><tr><td colspan="6">Aguardando resultados.</td></tr></tbody></table></section><button id="collection-show-more" type="button" hidden>Mostrar mais municípios</button>
+    <footer>IBGE · CONAB · MapBiomas · Sentinel-2 <span>Processado significa coleta encerrada; resultados parciais precisam de revisão. Histórico de um recorte de referência por cidade.</span></footer>
+  </main>
+</body>
+</html>

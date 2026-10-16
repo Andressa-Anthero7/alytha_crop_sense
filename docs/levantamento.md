@@ -1,5 +1,7 @@
 # Levantamento da aplicação
 
+> Documento histórico de 08/10/2026: algumas descrições abaixo foram superadas. Para o estado e o roteiro da demonstração guiada aos produtores, consulte [MVP para parceiros](mvp-parceiros.md) e execute `python -m app.demo_check` para verificar os dados locais atuais. Assistente, persistência, mapas de culturas e acompanhamento integrado já estão implementados.
+
 Revisão em 08/10/2026, baseada no código, nos testes e no planejamento existente. Esta revisão não reconfirma preços, contratos, quotas ou condições dos fornecedores citados nos documentos históricos.
 
 ## O que já temos

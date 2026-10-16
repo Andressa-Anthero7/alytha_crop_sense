@@ -28,7 +28,7 @@ def spatial_for(history, cutoff, job_id=None):
             valid=valid and all(period['to']<=cutoff for period in periods) and periods[-1]['to']>=(date.fromisoformat(cutoff)-timedelta(days=15)).isoformat()
         if job_id and not valid:raise ValueError('A análise espacial precisa ser do mesmo recorte e de um período compatível com a data selecionada.')
         if valid and candidate.get('status') in ('ready','inconclusive') and periods:matching.append(candidate)
-    return max(matching,key=lambda item:item['parameters']['as_of']) if matching else None
+    return max(matching,key=lambda item:(item['parameters']['as_of'],item['parameters'].get('algorithm_version',0),item.get('updated_at',''))) if matching else None
 
 
 def report(data, analysis=None):
@@ -54,6 +54,7 @@ def report(data, analysis=None):
     where='Falta uma comparação espacial compatível deste recorte para localizar as mudanças.'
     geojson={'type':'FeatureCollection','features':[]}
     spatial_summary={'status':'unavailable'}
+    progression={'status':'unavailable','fronts':[],'geojson':{'type':'FeatureCollection','features':[]}}
     features={}
     current=comparison.get('current',{})
     if current.get('usable'):
@@ -65,6 +66,7 @@ def report(data, analysis=None):
     if spatial:
         spatial_summary={key:spatial[key] for key in ('status','periods','analysis_area_ha','observed_area_ha','unobserved_area_ha','common_coverage')}
         spatial_summary['job_id']=spatial['id']
+        progression=spatial.get('progression',progression)
         if spatial['status']=='ready':
             low=spatial['persistent_low_ha'];gain=spatial['vegetation_gain_ha'];loss=spatial['vegetation_loss_ha']
             spatial_summary.update(persistent_low_ha=low,vegetation_gain_ha=gain,vegetation_loss_ha=loss)
@@ -85,15 +87,21 @@ def report(data, analysis=None):
         else:
             where='A comparação espacial ficou inconclusiva: falta acompanhar os mesmos pontos em pelo menos metade do recorte. Nenhuma mancha foi atribuída à área sem leitura.'
             priority='ampliar o acompanhamento do recorte'
+    from . import evolution_index
+    index=evolution_index.build(history,cutoff,comparison,spatial,data)
+    for signal,score in index['scores'].items():
+        if score['value'] is not None:features['evolution_index_'+signal]=score['value']
     result={'dataset_id':history['id'],'area_id':research.fingerprint(history['parameters']['geometry']),
             'municipality_code':history['parameters'].get('municipality_code','5107925'),'as_of':cutoff,
             'scope':'recorte específico; não representa toda a cidade','geometry':history['parameters']['geometry'],
             'status':'ready' if spatial and spatial['status']=='ready' else 'partial',
             'what_changed':changed,'where_changed':where,'next_signal':next_signal,'priority':priority,
             'historical_comparison':comparison,'learned_profile':profile,'spatial':spatial_summary,'geojson':geojson,
+            'progression':progression,
+            'evolution_index':index,
             'combined_features':{'area_id':research.fingerprint(history['parameters']['geometry']),'as_of':cutoff,**features},
             'note':'Sinais de monitoramento, sem confirmação de cultura, operação de manejo ou produtividade. O perfil aprendido serve como referência de comportamento e não prevê a produção.'}
-    result['id']=research.fingerprint([history['id'],cutoff,comparison,spatial['id'] if spatial else None,features,1])
+    result['id']=research.fingerprint([history['id'],cutoff,comparison,spatial['id'] if spatial else None,features,index,2])
     return result
 
 
@@ -101,6 +109,7 @@ def export(result):
     folder=OUTPUT_ROOT/result['id'];folder.mkdir(parents=True,exist_ok=True)
     (folder/'acompanhamento.json').write_text(json.dumps(result,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
     (folder/'mudancas.geojson').write_text(json.dumps(result['geojson'],ensure_ascii=False),encoding='utf-8')
+    (folder/'direcao.geojson').write_text(json.dumps(result['progression']['geojson'],ensure_ascii=False),encoding='utf-8')
     row=result['combined_features']
     with (folder/'caracteristicas_combinadas_ml.csv').open('w',encoding='utf-8-sig',newline='') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(row));writer.writeheader();writer.writerow(row)
@@ -114,4 +123,6 @@ def create(data):
 
 
 def evidence(result):
-    return {key:value for key,value in result.items() if key not in ('geojson','geometry','combined_features','historical_comparison')}
+    evidence={key:value for key,value in result.items() if key not in ('geojson','geometry','combined_features','historical_comparison','progression')}
+    if 'progression' in result:evidence['progression']={key:value for key,value in result['progression'].items() if key!='geojson'}
+    return evidence

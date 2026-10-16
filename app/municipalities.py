@@ -22,9 +22,15 @@ def request(code):
         recent = snapshot and datetime.now(timezone.utc)-datetime.fromisoformat(snapshot['fetched_at']) < timedelta(days=1)
         if code not in RUNNING and (not recent or snapshot['result']['status'] in ('queued','loading','partial','error')):
             RUNNING.add(code)
-            if not snapshot:
-                storage.source_snapshot(cache_key, {'code':code,'status':'queued','sources':{},'updated_at':storage.now()})
-            POOL.submit(build,code)
+            queued=dict(snapshot['result']) if snapshot else {'code':code,'sources':{}}
+            queued.update(status='queued',updated_at=storage.now())
+            storage.source_snapshot(cache_key,queued)
+            try: POOL.submit(build,code)
+            except Exception:
+                RUNNING.discard(code)
+                queued.update(status='error',error='Não foi possível iniciar a base municipal. Tente novamente.')
+                storage.source_snapshot(cache_key,queued)
+                raise ValueError(queued['error']) from None
     return storage.source_snapshot(cache_key)['result']
 
 def build(code):
@@ -43,20 +49,23 @@ def build(code):
         try:
             dossier['conab']={crop:data_sources.conab(uf,crop) for crop in ('SOJA','MILHO','SORGO')}
             dossier['sources']['conab']={'status':'ready','scope':'UF','note':'Contexto estadual; não representa produção municipal.'}
-        except Exception:
-            dossier['sources']['conab']={'status':'error','note':'Fonte indisponível. Nova seleção tentará novamente.'}
+        except Exception as exc:
+            from .collection_issues import failure
+            dossier['sources']['conab']={'status':'error','note':'Fonte indisponível. Nova seleção tentará novamente.','issue':failure('CONAB','base municipal',exc)}
         dossier['sources']['satveg']={'status':'pending','note':'Consulta depende de token e período. Não incluída automaticamente.'}
         dossier['sources']['mapbiomas']={'status':'loading','year':2025,'resolution_m':30}
         persist()
         try:
             dossier['mapbiomas']=data_sources.municipal_landcover(boundary)
             dossier['sources']['mapbiomas']={'status':'ready','year':2025,'resolution_m':30,'scope':'municipality','source_url':data_sources.MAPBIOMAS_PAGE}
-        except Exception:
-            dossier['sources']['mapbiomas']={'status':'error','note':'Resumo indisponível. Verifique dependências geoespaciais/conexão; nova seleção tentará novamente.'}
+        except Exception as exc:
+            from .collection_issues import failure
+            dossier['sources']['mapbiomas']={'status':'error','note':'Resumo indisponível. Verifique dependências geoespaciais/conexão; nova seleção tentará novamente.','issue':failure('MapBiomas','resumo municipal',exc)}
         dossier['status']='partial' if any(s['status']=='error' for s in dossier['sources'].values()) else 'ready'
         persist()
-    except Exception:
-        dossier['status']='error'; dossier['error']='Não foi possível obter o município no IBGE. Tente novamente.'; persist()
+    except Exception as exc:
+        from .collection_issues import failure
+        dossier['status']='error'; dossier['issue']=failure('IBGE','limite municipal',exc);dossier['error']='Não foi possível obter o município no IBGE. Tente novamente.'; persist()
     finally:
         with LOCK: RUNNING.discard(code)
 

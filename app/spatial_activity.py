@@ -32,9 +32,17 @@ def change_patches(mask, grid, signal, delta):
         if geometry.geom_type=='GeometryCollection':
             from shapely.ops import unary_union
             geometry=unary_union([part for part in geometry.geoms if part.geom_type in ('Polygon','MultiPolygon')])
+        rectangle = geometry.minimum_rotated_rectangle
+        corners = list(rectangle.exterior.coords) if rectangle.geom_type == 'Polygon' else []
+        sides = [((a[0]-b[0])**2+(a[1]-b[1])**2)**.5 for a,b in zip(corners,corners[1:])]
+        rectangularity = float(geometry.area/rectangle.area) if rectangle.area else 0
+        elongation = max(sides)/min(sides) if sides and min(sides)>0 else 0
+        pattern = 'faixa regular' if rectangularity>=.7 and elongation>=3 else 'bloco regular' if rectangularity>=.7 else 'mancha irregular'
         features.append({'type':'Feature','geometry':transform_geom(grid['crs'],'EPSG:4326',mapping(geometry)),
                          'properties':{'patch_id':index,'area_ha':int(stats[index,cv2.CC_STAT_AREA])*.01,'signal':signal,
-                                       'mean_ndvi_change':float(delta[labels==index].mean()),'observations':3}})
+                                       'mean_ndvi_change':float(delta[labels==index].mean()),'observations':3,
+                                       'shape_pattern':pattern,'rectangularity':round(rectangularity,3),
+                                       'elongation':round(elongation,2)}})
     return features,int(mapped.sum())*.01
 
 
@@ -77,7 +85,8 @@ def analyze_pixels(images, grid):
             'common_coverage':coverage, 'window_coverage':[float(mask.sum()/area_pixels) for mask in valid],
             'unobserved_area_ha':(area_pixels-common_pixels)*.01,
             'geojson':{'type':'FeatureCollection','features':[]},'resolution_m':10,'minimum_patch_ha':1,
-            'threshold_ndvi':.25,'status':'inconclusive','ml_features':None}
+            'threshold_ndvi':.25,'status':'inconclusive','ml_features':None,
+            'progression':{'status':'inconclusive','fronts':[],'geojson':{'type':'FeatureCollection','features':[]},'note':'Cobertura comum insuficiente para analisar direção.'}}
     if coverage<.5 or common_pixels<50:return base
     low = common & np.all(cube<=.25,axis=0)
     count,labels,stats,_ = cv2.connectedComponentsWithStats(low.astype(np.uint8),connectivity=8)
@@ -110,6 +119,20 @@ def analyze_pixels(images, grid):
     base.update(change_geojson={'type':'FeatureCollection','features':features+gain+loss},
                 vegetation_gain_ha=gain_ha,vegetation_loss_ha=loss_ha,change_threshold_ndvi=.15)
     base['ml_features'].update(vegetation_gain_fraction=gain_ha/base['observed_area_ha'],vegetation_loss_fraction=loss_ha/base['observed_area_ha'])
+    from . import vegetation_progression
+    base['progression']=vegetation_progression.analyze(cube,common,grid)
+    # Separate chronological gains, even when no coherent direction is detected.
+    # Early gains must persist into the last image; a later reversal is excluded.
+    early_mask=common & (cube[1]-cube[0]>=.15) & (cube[2]-cube[0]>=.15) & (cube[2]>=cube[1]-.05)
+    late_mask=common & ~early_mask & (cube[2]-cube[1]>=.15) & (cube[2]-cube[0]>=.15)
+    stages=[]
+    for stage,mask,change in [('early',early_mask,cube[1]-cube[0]),('late',late_mask,cube[2]-cube[1])]:
+        patches,area=change_patches(mask,grid,'vegetation_gain',change)
+        for feature in patches:feature['properties']['growth_stage']=stage
+        stages.append({'stage':stage,'area_ha':area,'features':patches})
+    base['growth_sequence']={'version':1,'stages':stages,
+        'geojson':{'type':'FeatureCollection','features':[f for stage in stages for f in stage['features']]},
+        'note':'Ganho de NDVI ≥ 0,15 em manchas de pelo menos 1 ha. Claro: aumento entre a primeira e a segunda imagem, mantido na última; escuro: aumento entre a segunda e a terceira, sem repetir os pixels da primeira etapa. A forma descreve a mancha observada, não delimita talhão cadastral nem confirma plantio.'}
     return base
 
 
@@ -129,6 +152,21 @@ def resolve_geometry(data):
     return history['result']['parameters']['geometry'], 'Área de referência de Sorriso · amostra, não município inteiro'
 
 
+def refresh_saved_growth(job):
+    """Upgrade visualization from saved rasters only, without provider requests."""
+    if job.get('status')!='ready' or job.get('growth_sequence',{}).get('version')==1:
+        return job
+    geometry=job['parameters']['geometry']
+    grid=spatial_raster.grid_for(geometry)
+    paths=[spatial_raster.cache_path(geometry,grid,period) for period in job['periods']]
+    if len(paths)!=3 or not all(path.is_file() for path in paths):return job
+    result=analyze_pixels([spatial_raster.read_raster(path,grid) for path in paths],grid)
+    result['progression']['periods']=job['periods']
+    job={**job,**result}
+    storage.source_snapshot('cv:job:'+job['id'],job)
+    return job
+
+
 def start(data):
     geometry,scope = resolve_geometry(data)
     spatial_raster.grid_for(geometry)  # Validate before queuing downloads.
@@ -136,11 +174,11 @@ def start(data):
     if not isinstance(as_of,str) or not date(2018,1,1)<=date.fromisoformat(as_of)<=inactive_soy.today():
         raise ValueError('Escolha uma data de acompanhamento entre 2018 e hoje.')
     params = {'geometry':geometry,'area_id':research.fingerprint(geometry),'as_of':as_of,
-              'scope':scope,'algorithm_version':2}
+              'scope':scope,'algorithm_version':3}
     job_id = research.fingerprint(params)
     with LOCK:
         cached = storage.source_snapshot('cv:job:'+job_id)
-        if cached and cached['result']['status'] in ('ready','inconclusive'):return cached['result']
+        if cached and cached['result']['status'] in ('ready','inconclusive'):return refresh_saved_growth(cached['result'])
         job = {'id':job_id,'parameters':params,'status':'loading','phase':'dates','processed':0,'total':3}
         if job_id not in RUNNING:
             RUNNING.add(job_id);storage.source_snapshot('cv:job:'+job_id,job);POOL.submit(build,job_id,params)
@@ -150,7 +188,7 @@ def start(data):
 def get(job_id):
     cached = storage.source_snapshot('cv:job:'+job_id)
     if not cached:raise ValueError('Análise espacial não encontrada.')
-    job = cached['result']
+    job = refresh_saved_growth(cached['result'])
     if job['status']=='loading':
         with LOCK:
             if job_id not in RUNNING:RUNNING.add(job_id);POOL.submit(build,job_id,job['parameters'])
@@ -182,6 +220,7 @@ def build(job_id,params):
             images.append(spatial_raster.fetch(params['geometry'],grid,period))
             job['processed']=len(images);persist()
         result = analyze_pixels(images,grid)
+        result['progression']['periods']=periods
         job.update(result);job['phase']='complete'
         job['note']='Pouca vegetação nos mesmos pixels em três períodos. Não confirma abandono, terra disponível ou etapa de manejo. Nuvens, sombras e água são excluídas. Áreas em hectares são estimadas na grade de 10 m, sem extrapolação.'
         folder = OUTPUT_ROOT/job_id
@@ -189,6 +228,8 @@ def build(job_id,params):
         (folder/'manchas.geojson').write_text(json.dumps(result['geojson'],ensure_ascii=False),encoding='utf-8')
         if result.get('change_geojson'):
             (folder/'mudancas.geojson').write_text(json.dumps(result['change_geojson'],ensure_ascii=False),encoding='utf-8')
+        (folder/'direcao.geojson').write_text(json.dumps(result['progression']['geojson'],ensure_ascii=False),encoding='utf-8')
+        (folder/'progressao.json').write_text(json.dumps(result['progression'],ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
         if result['ml_features']:
             row = {'area_id':params['area_id'],'date_from':periods[0]['from'],'date_to':periods[-1]['to'],**result['ml_features']}
             with (folder/'caracteristicas_ml.csv').open('w',encoding='utf-8-sig',newline='') as stream:

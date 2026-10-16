@@ -1,0 +1,2 @@
+# Native certificate-chain validation, including Windows CryptoAPI intermediates.
+truststore>=0.10.5,<1

@@ -5,6 +5,8 @@ const CROP_COLORS = {39:'#d6a316',20:'#269b65',40:'#3b82f6',62:'#a855f7',46:'#a6
 function cropColor(classId) { return CROP_COLORS[classId] || '#64748b'; }
 function featureColor(properties) { return properties.possible_inactive ? '#e76f51' : cropColor(properties.class_id); }
 const cropDataCache = new Map();
+const cropWanted=new Map();
+const cropRequestOwner=(()=>{const key='alytha-crop-request-owner';let value=sessionStorage.getItem(key);if(!value){value=crypto.randomUUID();sessionStorage.setItem(key,value);}return value;})();
 async function cropMapJson(url, payload) {
   try {
     const response = await fetch(url, {method:payload ? 'POST' : 'GET',headers:payload ? {'Content-Type':'application/json'} : undefined,body:payload ? JSON.stringify(payload) : undefined,signal:AbortSignal.timeout(15000)});
@@ -17,22 +19,29 @@ async function cropMapJson(url, payload) {
     throw error;
   }
 }
-async function loadCropData(payload) {
-  let job=await cropMapJson('/api/sources/mapbiomas/jobs',payload);
+async function loadCropData(payload,onProgress=()=>{}) {
+  const wantedKey=JSON.stringify(payload);
+  const current=()=>cropWanted.get(payload.class_id)===wantedKey;
+  onProgress('Consultando as culturas históricas da região…');
+  let job=await cropMapJson('/api/sources/mapbiomas/jobs',{...payload,request_owner:cropRequestOwner});
   const started=Date.now();
   while(job.status==='loading') {
+    if(!current())throw Error('Consulta substituída por outro enquadramento do mapa.');
+    onProgress(job.phase==='waiting' || job.phase==='queued'?'Consulta na fila. O mapa vai carregar automaticamente quando houver uma vaga…':'Preparando as manchas de culturas. Esta consulta pode levar alguns minutos…');
     if(!/^[a-f0-9]{64}$/.test(job.id))throw new Error('Não foi possível acompanhar a consulta de culturas. Tente novamente.');
     if(Date.now()-started>=600000)throw new Error('O mapa de culturas ainda está sendo preparado. Envie o pedido novamente para acompanhar a mesma consulta.');
     await new Promise(resolve=>setTimeout(resolve,1500));
     job=await cropMapJson('/api/sources/mapbiomas/jobs/'+job.id);
+    if(job.status==='superseded' && current())job=await cropMapJson('/api/sources/mapbiomas/jobs',{...payload,request_owner:cropRequestOwner});
   }
   if(job.status!=='ready')throw new Error(job.error || 'Não foi possível carregar as culturas do mapa. Tente novamente.');
   return job.result;
 }
-function cropData(payload) {
+function cropData(payload,onProgress) {
   const key = JSON.stringify(payload);
+  cropWanted.set(payload.class_id,key);
   if (!cropDataCache.has(key)) {
-    const request = loadCropData(payload)
+    const request = loadCropData(payload,onProgress)
       .catch(error => { cropDataCache.delete(key); throw error; });
     cropDataCache.set(key,request);
     if(cropDataCache.size>40) cropDataCache.delete(cropDataCache.keys().next().value);
@@ -41,6 +50,8 @@ function cropData(payload) {
 }
 
 function clearAgriculturalResults() {
+  cropWanted.clear();
+  window.mapLoading?.cancel('culturas');
   cropRequest++;
   clearTimeout(inactivePoll);
   if (mapReady) removeMapLayer(agriculturalLayer);
@@ -77,21 +88,25 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('input[name="map-crop"]').forEach(input => { input.checked = false; input.closest('label').style.setProperty('--crop-color',cropColor(input.value)); });
   for (let year = 2025; year >= 1985; year--) el('mapbiomas-year').add(new Option(year, year));
   async function run(button, status, task, revision, propagate=false) {
+    const work=status.id==='mapbiomas-status'?window.mapLoading?.begin('culturas','Carregando culturas no mapa'):null;
+    let failed=false;
     if(button) button.disabled = true;
     status.setAttribute('aria-busy','true'); status.textContent = 'Buscando dados…';
-    try { return await task(); } catch (error) { if (revision === undefined || revision === cropRequest) status.textContent = error.message;if(propagate)throw error; }
-    finally { if (revision === undefined || revision === cropRequest) { if(button) button.disabled = false; status.setAttribute('aria-busy','false'); } }
+    try { return await task(work); } catch (error) {failed=true;if (revision === undefined || revision === cropRequest){status.textContent = error.message;work?.fail(error.message);}else work?.cancel();if(propagate)throw error; }
+    finally { if (revision === undefined || revision === cropRequest) { if(button) button.disabled = false; status.setAttribute('aria-busy','false');if(!failed && !el('inactive-soy-filter').checked)work?.finish(status.textContent); }else work?.cancel(); }
   }
   function updateCropMap(propagate=false,isCurrent=()=>true) {
     clearTimeout(inactivePoll);
     const revision = ++cropRequest;
-    return run(null, el('mapbiomas-status'), async () => {
+    return run(null, el('mapbiomas-status'), async (work) => {
     if (!mapReady || drawingArea) throw new Error('Aguarde o mapa e conclua o desenho primeiro.');
     const classes = [...document.querySelectorAll('input[name="map-crop"]:checked')].map(input => Number(input.value));
+    for(const classId of cropWanted.keys())if(!classes.includes(classId))cropWanted.delete(classId);
     if (!classes.length) { el('mapbiomas-status').textContent = 'Marque uma cultura para visualizar suas áreas.'; return; }
     const b = map.getBounds(), sw = b.getSouthWest(), ne = b.getNorthEast();
     const bounds = openMap ? [sw.lng,sw.lat,ne.lng,ne.lat] : [sw.lng(),sw.lat(),ne.lng(),ne.lat()];
     const municipality_code=window.agriAssistantContext?.().municipality_code || el('municipality-select').value || undefined;
+    const state_code=!municipality_code ? el('state-select').value || new URL(location.href).searchParams.get('estado') || undefined : undefined;
     if(el('inactive-soy-filter').checked) {
       const job=await storageJson('/api/inactive-soy',{bounds,municipality_code,year:Number(el('mapbiomas-year').value)});
       if(revision===cropRequest) pollInactive(job,revision);
@@ -100,16 +115,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const results = [];
     let pending = classes.length;
     const tasks = classes.map(async class_id => {
-      const result = await cropData({bounds,municipality_code,year:Number(el('mapbiomas-year').value),class_id});
+      const result = await cropData({bounds,municipality_code,state_code,year:Number(el('mapbiomas-year').value),class_id},message=>{if(revision===cropRequest)work?.update(message);});
       results.push({...result,class_id}); pending--;
+      if(revision===cropRequest && pending)work?.update(`${classes.length-pending}/${classes.length} culturas carregadas. Aguardando as demais…`);
       if (revision === cropRequest && isCurrent()) renderCropResults(results,pending);
     });
     const settled = await Promise.allSettled(tasks);
     if (revision !== cropRequest || !isCurrent()) return null;
     if(results.length) renderCropResults(results,0);
     const failures=settled.filter(item => item.status === 'rejected');
-    if(failures.length) {el('mapbiomas-status').textContent += ' ' + failures.map(item => item.reason.message).join(' ');if(propagate)throw failures[0].reason;}
-    return {features:agriculturalFeatures.length,year:Number(el('mapbiomas-year').value)};
+    if(failures.length) {el('mapbiomas-status').textContent += ' ' + failures.map(item => item.reason.message).join(' ');throw failures[0].reason;}
+    const visible=agriculturalLayer && (openMap?map.hasLayer(agriculturalLayer):agriculturalLayer.getMap()===map);
+    if(agriculturalFeatures.length && !visible)throw Error('A fonte retornou áreas, mas a camada não ficou visível no mapa. Tente carregar novamente.');
+    return {features:agriculturalFeatures.length,visible:Boolean(visible),year:Number(el('mapbiomas-year').value)};
     }, revision,propagate);
   }
   function renderCropResults(results,pending) {
@@ -147,13 +165,16 @@ document.addEventListener('DOMContentLoaded', () => {
     (job.assessed || []).forEach(item=>{const p=document.createElement('p');p.textContent=`${item.area_ha} ha · ${item.status==='possible_inactive' ? 'possível inatividade' : item.status==='unknown' ? 'inconclusivo' : 'não corresponde'}${item.latest_date ? ` · ${item.latest_date} · NDVI ${item.latest_ndvi.toFixed(3)}` : ''}. ${item.reason}`;output.append(p);});
     if(job.status==='loading') inactivePoll=setTimeout(async()=>{
       try { const result=await storageJson(`/api/inactive-soy/${job.id}`);pollInactive(result,revision); }
-      catch(error) { if(revision===cropRequest) el('mapbiomas-status').textContent=error.message; }
+      catch(error) { if(revision===cropRequest){el('mapbiomas-status').textContent=error.message;window.mapLoading?.begin('culturas','Analisando atividade no mapa').fail(error.message);} }
     },2500);
     if(job.status==='error') el('mapbiomas-status').textContent=job.error;
+    const work=window.mapLoading?.begin('culturas','Analisando atividade no mapa',el('mapbiomas-status').textContent);
+    if(job.status==='error')work?.fail(job.error);
+    else if(job.status!=='loading')work?.finish(el('mapbiomas-status').textContent);
   }
   el('mapbiomas-candidates').addEventListener('change', event => { if (event.target.value !== '') useAgriculturalArea(Number(event.target.value)); });
   let layersHidden=false;
-  window.showCropClasses=async ({class_ids,year,municipality_code,isCurrent})=>{
+  window.showCropClasses=async ({class_ids,year,municipality_code,state_code,isCurrent,focus_results=false})=>{
     if(!mapReady || drawingArea)throw Error('Aguarde o mapa e conclua o desenho antes de mostrar a cultura.');
     if(!class_ids.length) {
       layersHidden=true;clearTimeout(viewportTimer);
@@ -163,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
       clearAgriculturalResults();el('mapbiomas-status').textContent='Camadas de culturas ocultas.';
       return {hidden:true,features:0,year:Number(el('mapbiomas-year').value)};
     }
-    const dossier=await storageJson('/api/municipalities/'+municipality_code);
+    const dossier=state_code ? {boundary:await storageJson('/api/locations/boundaries/states/'+state_code)} : await storageJson('/api/municipalities/'+municipality_code);
     if(!isCurrent())return null;
     if(!dossier.boundary)throw Error('A base da cidade ainda está carregando. Tente novamente em instantes.');
     clearTimeout(viewportTimer);layersHidden=true;
@@ -179,7 +200,12 @@ document.addEventListener('DOMContentLoaded', () => {
       else await new Promise(resolve=>{let listener;const finish=()=>{clearTimeout(timeout);if(listener)google.maps.event.removeListener(listener);resolve();};const timeout=setTimeout(finish,1500);listener=google.maps.event.addListenerOnce(map,'idle',finish);fitGeojson(dossier.boundary);});
       if(!isCurrent())return null;
       clearTimeout(viewportTimer);
-      return await updateCropMap(true,isCurrent);
+      const shown=await updateCropMap(true,isCurrent);
+      if(focus_results && shown?.features && isCurrent()){
+        if(openMap)map.fitBounds(agriculturalLayer.getBounds(),{padding:[50,50],animate:false,maxZoom:12});
+        else fitGeojson({type:'FeatureCollection',features:agriculturalFeatures});
+      }
+      return shown;
     } finally {layersHidden=false;if(isCurrent())clearTimeout(viewportTimer);}
   };
   el('clear-mapbiomas').addEventListener('click', () => { layersHidden=true; clearAgriculturalResults(); el('mapbiomas-status').setAttribute('aria-busy','false'); el('mapbiomas-status').textContent = 'Camada oculta. Marque uma cultura para voltar a exibir.'; });

@@ -213,35 +213,61 @@
     .leaflet-bottom { bottom:calc(var(--timeline-height,68px) + 2px); }
   </style>
   <link rel="stylesheet" href="/notebook-layout.css">
+  <link rel="stylesheet" href="/ai-workspace.css">
 </head>
-<body>
-  <header aria-label="Alytha"><img class="brand" src="/alytha-logo.png" alt="Alytha"><span class="workspace-title">Monitoramento agrícola</span></header>
+<body class="ai-mode">
+  <div id="geojson-drop-overlay" hidden aria-live="polite"><div><strong>Solte o GeoJSON para carregar a área</strong><p>Um arquivo .geojson ou .json · até 2 MB</p><small>O contorno carregado substitui a área em análise.</small></div></div>
+  <header aria-label="Alytha"><img class="brand" src="/alytha-logo.png" alt="Alytha"><span class="workspace-title">Inteligência agrícola</span><a class="workspace-collection" href="/coleta.html">Base de dados <span aria-hidden="true">↗</span></a></header>
   <main>
     <h1>Monitoramento de talh&#245;es</h1>
     <p class="intro">Acompanhe a &#225;rea delimitada, encontre imagens de sat&#233;lite e visualize a evolu&#231;&#227;o do vigor da lavoura ao longo da safra.</p>
     <div class="notice"><strong>Uso na valida&#231;&#227;o do lote:</strong> &#237;ndices de vegeta&#231;&#227;o s&#227;o evid&#234;ncias auxiliares. Eles n&#227;o comprovam titularidade, produtividade final, volume dispon&#237;vel ou estoque.</div>
-    <div class="searchbar"><input id="location-search" type="search" placeholder="Buscar munic&#237;pio, fazenda ou coordenadas" aria-label="Buscar local no mapa"><button id="location-search-button" type="button" aria-label="Buscar">&#8981;</button></div>
+    <div class="searchbar"><input id="location-search" type="search" placeholder="Cidade, estado, endereço ou coordenadas" aria-label="Buscar local no mapa" role="combobox" aria-autocomplete="list" aria-controls="location-options" aria-expanded="false" autocomplete="off" maxlength="120"><button id="location-search-button" type="button" aria-label="Buscar">&#8981;</button><div id="location-matches" hidden aria-label="Localidades encontradas"><p id="location-search-status" role="status" aria-live="polite"></p><div id="location-options" role="listbox" aria-label="Localidades do IBGE"></div></div></div>
     <div class="layout">
-      <section class="card map-card" aria-label="Mapa do talh&#227;o e das cenas"><div class="map-label" id="map-label">Nenhuma &#225;rea selecionada</div><div id="map"></div><div class="map-legend"><strong>NDVI &middot; vigor da vegeta&#231;&#227;o</strong><div class="legend-ramp"></div><div class="legend-labels"><span>mais baixo</span><span>mais alto</span></div></div></section>
-      <div class="toolbar" aria-label="Ferramentas do mapa"><button id="panel-toggle" class="tool-button" type="button" aria-label="Camadas e cenas" aria-expanded="false" title="Camadas e cenas">&#9776;</button><button id="pen-tool" class="tool-button" type="button" aria-label="Caneta: desenhar área" aria-pressed="false" title="Caneta: desenhar área (Esc cancela)" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 5 5-13 13H3v-5Z"/><path d="m14 5 5 5"/></svg></button><button id="upload-trigger" class="tool-button" type="button" aria-label="Carregar talh&#227;o GeoJSON" title="Carregar talh&#227;o GeoJSON">&#43;</button><button id="chart-toggle" class="tool-button" type="button" aria-label="Mostrar gr&#225;fico NDVI" title="Mostrar gr&#225;fico NDVI">&#8767;</button><button id="ai-mode-toggle" class="tool-button ai-mode-button" type="button" aria-label="Modo I.A" title="Modo I.A">Modo I.A</button></div>
-      <section class="ai-prompt-panel" id="ai-prompt-panel" aria-label="Prompt da intelig&#234;ncia artificial" hidden>
-        <button id="ai-panel-close" class="ai-close" type="button" aria-label="Fechar">&times;</button>
+      <section class="card map-card" aria-label="Mapa do talh&#227;o e das cenas">
+        <div class="map-label" id="map-label">Nenhuma &#225;rea selecionada</div><div id="map"></div>
+        <label id="scene-footprints-control" hidden><input id="scene-footprints" type="checkbox"> Limites das cenas (<span id="scene-footprints-count">0</span>) <span class="scene-footprint-swatch" aria-hidden="true"></span></label>
+        <div id="draw-controls" hidden role="group" aria-label="Desenhar área de consulta">
+          <p id="drawing-hint" role="status" aria-live="polite">Marque pelo menos 3 pontos no mapa.</p>
+          <div class="area-actions"><button id="finish-drawing" type="button" disabled>Concluir desenho</button><button id="undo-point" type="button">Desfazer ponto</button><button id="cancel-drawing" type="button">Cancelar</button></div>
+        </div>
+        <aside id="map-loading" class="map-loading" role="status" aria-live="polite" aria-busy="false" hidden><span class="map-loading-spinner" aria-hidden="true"></span><div><strong id="map-loading-title">Carregando mapa</strong><p id="map-loading-message"></p></div><button id="map-loading-close" type="button" aria-label="Fechar aviso" hidden>&times;</button></aside><div class="map-legend"><strong>NDVI &middot; vigor da vegeta&#231;&#227;o</strong><div class="legend-ramp"></div><div class="legend-labels"><span>mais baixo</span><span>mais alto</span></div></div>
+      </section>
+      <div class="toolbar" aria-label="Ferramentas do mapa">
+        <button id="ai-mode-toggle" class="tool-button ai-mode-button" type="button" aria-label="Modo I.A" title="Modo I.A" aria-expanded="true" aria-controls="ai-prompt-panel"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z"/><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6Z"/></svg><span>I.A</span></button>
+        <button id="panel-toggle" class="tool-button" type="button" aria-label="Camadas e cenas" aria-expanded="false" aria-controls="side-panel" title="Camadas e cenas"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg></button>
+        <button id="pen-tool" class="tool-button" type="button" aria-label="Caneta: desenhar área" aria-pressed="false" title="Caneta: desenhar área (Esc cancela)" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 3 5 5-13 13H3v-5Z"/><path d="m14 5 5 5"/></svg></button>
+        <button id="upload-trigger" class="tool-button" type="button" aria-label="Carregar talhão GeoJSON" title="Carregar GeoJSON ou arrastar um arquivo para o mapa"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V3m-4 4 4-4 4 4M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg></button>
+        <button id="chart-toggle" class="tool-button" type="button" aria-label="Mostrar gráfico NDVI" title="Mostrar gráfico NDVI"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18M7 15l4-5 4 3 6-8"/></svg></button>
+      </div>
+      <section class="ai-prompt-panel" id="ai-prompt-panel" aria-label="Converse com a Alytha">
+        <button id="ai-panel-close" class="ai-close" type="button" aria-label="Recolher conversa" title="Recolher conversa">&times;</button>
+        <div class="ai-welcome">
+          <div class="ai-introduction"><span class="ai-symbol" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 4c-9-1-15 3-14 9 1 5 7 6 10 2 2-3 2-7 4-11Z"/><path d="M5 20c0-5 4-9 8-11"/><path d="m17 18 1 2 2 1-2 1-1 2-1-2-2-1 2-1Z"/></svg></span><span class="ai-eyebrow">ALYTHA <span aria-hidden="true">/</span> SEU CAMPO EM PERSPECTIVA</span></div>
+          <h2>O que vamos descobrir no campo?</h2>
+          <p>Um mapa, boas perguntas e as evidências da sua lavoura.</p>
+        </div>
         <div class="ai-reading">
           <span class="ai-eyebrow">LEITURA DA ÁREA</span>
           <div class="ai-note" id="ai-prompt-status" role="log" aria-live="polite" aria-label="Conversa com a Alytha"></div>
         </div>
         <div class="ai-composer">
-          <label for="ai-prompt">O que vamos investigar?</label>
-          <input id="ai-prompt" type="text" maxlength="3000" placeholder="Converse com a Alytha sobre esta área…">
-          <div class="ai-suggestions" aria-label="Sugestões de perguntas">
-            <button type="button" data-ai-question="O que mudou nas leituras recentes de vegetação da área pesquisada?">O que mudou?</button>
-            <button type="button" data-ai-question="A sequência disponível é compatível com emergência da lavoura? Explique as evidências e o que ainda não podemos concluir.">Possível emergência</button>
+          <label class="visually-hidden" for="ai-prompt">Sua pergunta para a Alytha</label>
+          <div class="ai-input-shell">
+            <textarea id="ai-prompt" rows="1" maxlength="3000" placeholder="Pergunte à Alytha sobre uma área, uma safra, uma mudança…" aria-describedby="ai-composer-hint"></textarea>
+            <button id="ai-prompt-submit" type="button" aria-label="Enviar pergunta" title="Enviar pergunta"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
           </div>
-          <button id="ai-prompt-submit" type="button">Enviar</button>
-          <small>Enter para enviar</small>
+        </div>
+        <div class="ai-composer-footer">
+          <div class="ai-suggestions" aria-label="Sugestões de perguntas">
+            <button type="button" data-ai-question="Quais imagens temos salvas?"><span aria-hidden="true">▦</span> Meus dados salvos</button>
+            <button type="button" data-ai-question="O que mudou nas leituras recentes de vegetação da área pesquisada?"><span aria-hidden="true">↗</span> O que mudou?</button>
+            <button type="button" data-ai-question="Mostre soja no mapa"><span aria-hidden="true">⌖</span> Explorar soja</button>
+          </div>
+          <small id="ai-composer-hint">Enter para enviar · Shift + Enter para nova linha</small>
         </div>
       </section>
-      <section class="card panel" id="side-panel">
+      <section class="card panel closed" id="side-panel">
         <h2 class="section-title">Localidade</h2>
         <label for="state-select">Estado</label><select id="state-select"><option value="">Carregando estados…</option></select>
         <label for="municipality-select">Município</label><select id="municipality-select" disabled><option value="">Selecione um estado</option></select>
@@ -280,21 +306,61 @@
         </details>
         <details id="selected-area-tools"><summary>&Aacute;rea de an&aacute;lise</summary>
         <div class="area-actions"><button id="draw-area" type="button" disabled>Desenhar área</button><button id="clear-area" type="button">Limpar área</button></div>
-        <div class="area-actions" id="draw-controls" hidden><button id="finish-drawing" type="button" disabled>Concluir desenho</button><button id="undo-point" type="button">Desfazer ponto</button><button id="cancel-drawing" type="button">Cancelar</button></div>
         <p id="area-details" role="status">Desenhe uma área com pelo menos três pontos no mapa ou carregue um GeoJSON.</p>
         </details>
-        <details id="spatial-panel"><summary>Manchas de pouca vegetação · visão espacial</summary>
-          <p class="analysis-subtitle">Compare os mesmos pontos da área em três períodos de imagens. Os contornos destacam manchas de pelo menos 1 ha com pouca vegetação persistente.</p>
+        <details id="soy-study-panel"><summary>Ciclo da soja · estudo e planejamento</summary>
+          <p id="soy-study-status" class="analysis-subtitle">Do planejamento à pós-colheita: referências, evidências possíveis e verificações de campo.</p>
+          <label for="soy-study-topic">Etapa ou tema de manejo</label>
+          <select id="soy-study-topic" disabled><option>Abra para carregar os temas</option></select>
+          <div id="soy-study-content"></div>
+          <details><summary>Próximas integrações da rodada</summary><div id="soy-study-roadmap"></div></details>
+        </details>
+        <details id="planting-panel"><summary>Condições para plantio · soja</summary>
+          <p class="analysis-subtitle">Avalie clima recente, previsão de 7 dias, solo estimado e vegetação salva do recorte. Complete as verificações de campo para avaliar os fatores que o satélite não confirma.</p>
+          <p id="planting-scope" class="analysis-subtitle">Selecione uma área no mapa.</p>
+          <label for="planting-water">Manejo hídrico</label>
+          <select id="planting-water"><option value="rainfed">Sequeiro</option><option value="irrigated">Irrigado</option></select>
+          <details><summary>Verificações de campo e janela de plantio</summary>
+            <label for="planting-soil">Solo na profundidade da semente</label>
+            <select id="planting-soil"><option value="unknown">Ainda não verificado</option><option value="adequate">Úmido e com condição física adequada</option><option value="dry">Seco</option><option value="waterlogged">Encharcado</option></select>
+            <label for="planting-drainage">Drenagem e trafegabilidade</label>
+            <select id="planting-drainage"><option value="unknown">Ainda não verificadas</option><option value="adequate">Verificadas e adequadas</option><option value="problem">Há problemas</option></select>
+            <label for="planting-fertility">Análise e correção do solo</label>
+            <select id="planting-fertility"><option value="unknown">Ainda não verificadas</option><option value="verified">Verificadas e atendidas</option><option value="needs_correction">Correções pendentes</option></select>
+            <label for="planting-calendar">Calendário sanitário local para soja</label>
+            <select id="planting-calendar"><option value="unknown">Ainda não consultei</option><option value="verified">Consultei: dentro do período permitido</option><option value="outside">Consultei: fora do período permitido</option></select>
+            <label for="planting-zarc">ZARC para município, cultivar e solo</label>
+            <select id="planting-zarc"><option value="unknown">Ainda não consultei</option><option value="verified">Consultei: dentro da janela indicada</option><option value="outside">Consultei: fora da janela indicada</option></select>
+            <p class="analysis-subtitle">Estas verificações são informadas por você; não são confirmações automáticas do sistema. Consulte o ZARC e o calendário vigentes para a área.</p>
+            <a href="https://www.gov.br/agricultura/pt-br/assuntos/riscos-seguro/programa-nacional-de-zoneamento-agricola-de-risco-climatico" target="_blank" rel="noopener">Consultar ZARC oficial</a>
+          </details>
+          <button id="start-planting" type="button">Avaliar condições para plantio</button>
+          <p class="analysis-subtitle">Ao clicar, consulta dados meteorológicos de grade. Não baixa novas imagens de satélite.</p>
+          <p id="planting-status" class="analysis-subtitle" role="status">Aguardando área selecionada.</p>
+          <div id="planting-results" aria-live="polite"></div>
+        </details>
+        <details id="spatial-panel"><summary>Evolução da vegetação · manchas e direção</summary>
+          <p class="analysis-subtitle">Veja onde o verde aumentou e compare a sequência das manchas em três períodos. A forma e a direção ajudam a observar faixas ou blocos organizados; não confirmam plantio.</p>
+          <label for="spatial-view">Mostrar no mapa</label>
+          <select id="spatial-view"><option value="gain">Onde a vegetação aumentou</option><option value="sequence">Sequência do aumento · antes e depois</option><option value="low">Pouca vegetação persistente</option><option value="loss">Onde a vegetação diminuiu</option></select>
+          <p id="spatial-map-legend" class="analysis-subtitle" aria-live="polite"></p>
           <p id="spatial-scope" class="analysis-subtitle">Usa o recorte selecionado no mapa. Sem recorte selecionado, usa a referência de Sorriso; não representa a cidade inteira.</p>
-          <button id="start-spatial-analysis" type="button">Analisar manchas por satélite</button>
+          <button id="start-spatial-analysis" type="button">Analisar mudanças e direção</button>
           <button id="clear-spatial-analysis" type="button" hidden>Retirar contornos do mapa</button>
           <p id="spatial-status" class="analysis-subtitle" role="status">Não exige registros de campo. Nuvens e áreas sem leitura ficam fora da conclusão.</p>
           <div id="spatial-results" class="analysis-subtitle"></div>
           <details><summary>Como interpretar</summary><p class="analysis-subtitle">Pouca vegetação persistente pode ocorrer após colheita, em preparo ou pousio. Não confirma abandono, terra disponível, linhas de plantio ou manejo. A análise precisa observar pelo menos metade do recorte nos três períodos. Os hectares são estimados com pixels de 10 m.</p></details>
         </details>
-        <details id="research-panel"><summary>Leitura por satélite · piloto Sorriso</summary>
+        <details id="regional-scan-panel"><summary>Coleta automática da região</summary>
+          <p id="regional-scan-status" class="analysis-subtitle" role="status">Pesquise ou selecione uma cidade ou estado para reunir dados oficiais.</p>
+          <p class="analysis-subtitle">IBGE, contexto estadual CONAB, culturas MapBiomas e atividade recente da soja. Histórico desde 2018 de um recorte de referência por cidade. A coleta estadual percorre municípios em fila e pode levar horas ou dias.</p>
+          <button id="retry-regional-scan" type="button" disabled>Retomar fontes pendentes</button>
+          <button id="export-regional-scan" type="button" disabled>Exportar relatório da coleta</button>
+          <div id="regional-scan-results" class="analysis-subtitle"></div>
+        </details>
+        <details id="research-panel"><summary>Histórico e leitura por satélite</summary>
           <p class="analysis-subtitle">Explore a evolução da vegetação e os padrões das áreas de soja histórica, sem precisar de registros de campo.</p>
-          <details open><summary>Aprendizado por satélite · Sorriso</summary>
+          <details open><summary>Aprendizado por satélite · município selecionado</summary>
             <p id="satellite-model-status" class="analysis-subtitle" role="status">Carregando padrões disponíveis…</p>
             <div id="satellite-profiles" class="analysis-subtitle"></div>
             <button id="learn-satellite-patterns" type="button">Atualizar padrões com as leituras coletadas</button>
@@ -304,23 +370,43 @@
           <label for="research-start-year">Histórico desde</label><select id="research-start-year"><option>2018</option><option>2019</option><option>2020</option><option>2021</option><option>2022</option><option>2023</option><option>2024</option><option>2025</option></select>
           <button id="start-area-history" type="button">Analisar histórico da área selecionada</button>
           <p id="research-status" class="analysis-subtitle" role="status">Selecione uma área ou abra a referência do piloto.</p>
-          <label for="research-year">Ver ano no gráfico</label><select id="research-year" disabled><option value="">Carregue um histórico</option></select>
+          <label for="research-year">Ver período no gráfico</label><select id="research-year" disabled><option value="">Carregue um histórico</option></select>
           <div id="research-analysis" class="analysis-subtitle"></div>
+          <details id="learning-cycle-panel" open><summary>Aprendizado contínuo · satélite, Alytha e campo</summary>
+            <p class="analysis-subtitle"><a href="/coleta.html">Abrir a base integrada de todos os municípios e a fila da Alytha</a></p>
+            <p class="analysis-subtitle">Acompanhe a mesma área a cada cinco dias. A Alytha revisa as evidências e sugere o que verificar com os parceiros. Períodos sem imagens úteis ficam inconclusivos.</p>
+            <button id="enable-learning-cycle" type="button" disabled>Acompanhar esta área continuamente</button>
+            <p id="learning-cycle-status" class="analysis-subtitle" role="status">Abra o histórico de uma área para iniciar.</p>
+            <div id="learning-cycle-plans"></div>
+            <button id="export-learning-cycle" type="button">Exportar base de aprendizado contínuo</button>
+          </details>
+          <details id="visual-learning-panel" open><summary>IA · análise direta das imagens</summary>
+            <p class="analysis-subtitle">Compara imagens reais de períodos diferentes, cor natural quando disponível e mapas NDVI. A interpretação visual alimenta a investigação; confirmações de manejo vêm dos parceiros.</p>
+            <button id="start-visual-learning" type="button" disabled>Analisar imagens deste recorte com IA</button>
+            <p id="visual-learning-status" class="analysis-subtitle" role="status">Abra o histórico da área para analisar suas imagens.</p>
+            <div id="visual-learning-results"></div>
+          </details>
           <details id="crop-monitoring-panel" open><summary>Acompanhamento da área</summary>
             <p id="crop-monitoring-scope" class="analysis-subtitle">Histórico, mudanças no mapa e padrões de vegetação do mesmo recorte.</p>
             <button id="start-crop-monitoring" type="button" disabled>Atualizar acompanhamento</button>
+            <details><summary>Janela de plantio conhecida · opcional</summary><p class="analysis-subtitle">Informe uma janela fornecida pelo produtor para este recorte. Ela entra no índice como declaração, sem confirmação automática. Deixe em branco se não souber.</p><label for="evolution-window-from">Início da janela</label><input id="evolution-window-from" type="date"><label for="evolution-window-to">Fim da janela</label><input id="evolution-window-to" type="date"><p class="analysis-subtitle">Ao atualizar o acompanhamento, a janela será salva para esta área. Fatores ausentes não aumentam os demais pesos.</p></details>
             <p id="crop-monitoring-status" class="analysis-subtitle" role="status">Abra um histórico para iniciar.</p>
             <div id="crop-monitoring-results"></div>
             <button id="hide-crop-monitoring" type="button" hidden>Ocultar manchas do acompanhamento</button>
           </details>
           <details><summary>Como esta análise foi feita</summary><p id="research-analysis-method" class="analysis-subtitle"></p></details>
-          <details><summary>Registrar manejo conhecido · opcional</summary>
+          <details id="field-evidence-panel"><summary>Validação com o produtor · registros de campo</summary>
+            <p class="analysis-subtitle">Registre o que aconteceu nesta área e quando. Informe a origem: relato do produtor, caderno de operações ou visita. Use apenas situações conhecidas; hipóteses do satélite não são confirmações.</p>
+            <p id="field-evidence-scope" class="analysis-subtitle">Abra o histórico da área para vincular os registros ao polígono correto.</p>
             <label for="event-from">Início da etapa</label><input id="event-from" type="date">
             <label for="event-to">Fim da etapa</label><input id="event-to" type="date">
             <label for="event-stage">Etapa observada em campo</label><select id="event-stage"><option value="emergencia">Emergência</option><option value="desenvolvimento">Desenvolvimento</option><option value="colheita">Colheita recente</option><option value="solo_exposto">Solo exposto</option><option value="preparo">Preparo do solo</option><option value="plantio">Plantio</option><option value="pousio">Pousio</option></select>
             <label for="event-note">Referência da informação</label><input id="event-note" maxlength="500" placeholder="Ex.: registro do produtor, visita ao campo">
-            <button id="save-field-event" type="button">Salvar registro de campo</button>
+            <button id="save-field-event" type="button" disabled>Salvar registro de campo</button>
             <p id="event-status" class="analysis-subtitle" role="status"></p>
+            <button id="export-field-evidence" type="button" disabled>Exportar registros desta área</button>
+            <div id="field-evidence-list" class="analysis-subtitle" aria-live="polite"></div>
+            <p class="analysis-subtitle">Registros ficam neste computador. Fotos não são anexadas nesta versão; informe a referência do arquivo na descrição e preserve o original junto ao material de validação.</p>
           </details>
           <details><summary>Modelo com manejo confirmado · opcional</summary>
             <p id="model-status" class="analysis-subtitle" role="status"></p>
@@ -355,7 +441,7 @@
         <div class="source-list">
           <div class="source active"><div><strong>Sentinel-2</strong><small>10 m &middot; revisita nominal de 5 dias &middot; NDVI</small></div><span class="source-state">DISPON&#205;VEL</span></div>
         </div>
-        <div class="field-upload"><label for="field-file">&#193;rea do talh&#227;o (GeoJSON)</label><input id="field-file" type="file" accept=".geojson,.json,application/geo+json,application/json"><div class="analysis-subtitle">Importe o contorno de uma área ou use a caneta no mapa. Salve a área para acompanhar seu histórico.</div></div>
+        <div class="field-upload"><label for="field-file">&#193;rea do talh&#227;o (GeoJSON)</label><input id="field-file" type="file" accept=".geojson,.json,application/geo+json,application/json"><div class="analysis-subtitle">Arraste um GeoJSON para o mapa ou selecione o arquivo. Salve a área para acompanhar seu histórico.</div></div>
         </details>
         <details><summary>Imagens encontradas</summary>
         <div class="results"><div class="results-head"><h2>Cenas encontradas</h2><span id="count">&mdash;</span></div><div id="items"><div class="empty">Defina o per&#237;odo e consulte o cat&#225;logo.</div></div></div>
@@ -364,6 +450,7 @@
       <section class="timeline" aria-label="Linha do tempo de imagens e NDVI">
         <div class="timeline-controls">
           <h2>Per&#237;odo e consulta de imagens</h2>
+          <div><label for="date-range-preset">Período</label><select id="date-range-preset" aria-label="Período de consulta"><option value="1">1 mês</option><option value="3">3 meses</option><option value="6" selected>6 meses</option><option value="9">9 meses</option><option value="12">12 meses</option><option value="custom">Personalizado</option></select></div>
           <div><label for="date-from">Data inicial</label><input id="date-from" type="date" aria-label="Data inicial"></div>
           <div><label for="date-to">Data final</label><input id="date-to" type="date" aria-label="Data final"></div>
           <div class="cloud-control"><label for="cloud">Nuvens m&#225;x.</label><div class="range-row"><input id="cloud" type="range" min="0" max="100" value="40" aria-label="Cobertura m&#225;xima de nuvens"><span class="range-value" id="cloud-value">40%</span></div></div>
@@ -386,7 +473,7 @@
         <div class="chart-controls" aria-label="Mapa e zoom do histórico de atividade"><label class="activity-map-toggle"><input id="soy-map-classes" type="checkbox" checked>Classes no mapa</label><button id="soy-zoom-in" type="button" aria-label="Aproximar histórico" disabled>+</button><button id="soy-zoom-out" type="button" aria-label="Afastar histórico" disabled>−</button><button id="soy-zoom-reset" type="button" disabled>Ver todo o período</button></div>
         <p id="soy-map-status" role="status"></p>
         <svg id="soy-chart" viewBox="0 0 640 190" role="group" tabindex="0" aria-label="Histórico interativo dos sinais de atividade. Use as setas para consultar as datas." aria-describedby="soy-point-detail"><text x="320" y="95" text-anchor="middle" fill="#718078" font-size="14">Selecione uma cidade para consultar a soja</text></svg>
-        <div class="chart-legend" aria-label="Classes de atividade vegetativa"><span><i style="--legend-color:#ce9352" aria-hidden="true"></i>Baixo vigor persistente</span><span><i style="--legend-color:#33816d" aria-hidden="true"></i>Vegetação mais expressiva no período</span><span><i style="--legend-color:#c5cdd2" aria-hidden="true"></i>Avaliação inconclusiva</span></div>
+        <div class="chart-legend" aria-label="Classes de atividade vegetativa"><span><i style="--legend-color:#c7b18a" aria-hidden="true"></i>Pouca vegetação persistente</span><span><i style="--legend-color:#33816d" aria-hidden="true"></i>Vegetação observada no período</span><span><i style="--legend-color:#c5cdd2" aria-hidden="true"></i>Sem leitura suficiente</span></div>
         <p id="soy-point-detail" aria-live="polite">Selecione uma data para consultar a área por classe de atividade vegetativa.</p>
         <details><summary>Critérios da avaliação vegetativa</summary><p id="soy-technical-detail">Classificação pelo vigor vegetativo observado via satélite. A interpretação não determina a fase fenológica ou as operações de manejo.</p></details>
       </section>
@@ -400,6 +487,9 @@
             <button id="ndvi-panel-close" class="analysis-close" type="button" aria-label="Recolher gráfico de vigor" title="Recolher gráfico">×</button>
           </div>
           <div id="ndvi-content">
+          <p id="ndvi-local-message" role="status"></p>
+          <div id="ndvi-local-selector" hidden><label for="ndvi-local-series">Recorte disponível na base local</label><select id="ndvi-local-series"></select></div>
+          <p id="ndvi-local-scope"></p><button id="ndvi-local-period" type="button" hidden>Consultar datas salvas</button>
           <p class="analysis-subtitle">Acompanhe como a vegetação mudou na área. Cada leitura reúne até 5 dias de imagens; partes sem boa visibilidade ficam fora do cálculo.</p>
           <div class="chart-controls" aria-label="Zoom do gráfico"><button id="ndvi-zoom-in" type="button" aria-label="Aproximar gráfico" disabled>+</button><button id="ndvi-zoom-out" type="button" aria-label="Afastar gráfico" disabled>−</button><button id="ndvi-zoom-reset" type="button" disabled>Ver todo o período</button></div>
           <svg id="ndvi-chart" viewBox="0 0 640 190" role="group" tabindex="0" aria-label="Gráfico interativo de NDVI. Use as setas para consultar os pontos." aria-describedby="ndvi-point-detail"><text x="320" y="95" text-anchor="middle" fill="#718078" font-size="14">Ainda n&#227;o h&#225; uma s&#233;rie processada</text></svg>
@@ -411,13 +501,24 @@
     </div>
     <footer>Mapa: Google Maps &middot; &#237;ndices: Copernicus Sentinel Hub &middot; cenas: cat&#225;logo Sentinel-2 L2A. PlanetScope depende de licen&#231;a comercial.</footer>
   </main>
+  <script src="/map-loading.js"></script>
   <script src="/areas.js"></script>
+  <script src="/geojson-upload.js"></script>
+  <script src="/date-range.js"></script>
   <script src="/saved-areas.js"></script>
   <script src="/sources.js"></script>
+  <script src="/regional-scan.js"></script>
+  <script src="/field-evidence.js"></script>
+  <script src="/learning-cycle.js"></script>
+  <script src="/visual-learning.js"></script>
   <script src="/research.js"></script>
   <script src="/ndvi-chart.js"></script>
+  <script src="/planting-readiness.js"></script>
+  <script src="/soy-study.js"></script>
+  <script src="/saved-observations.js"></script>
   <script src="/soy-activity.js"></script>
   <script src="/soy-activity-map.js"></script>
+  <script src="/vegetation-progression.js"></script>
   <script src="/spatial-activity.js"></script>
   <script src="/crop-monitoring.js"></script>
   <script src="/agri-assistant.js"></script>
@@ -429,7 +530,7 @@
       document.documentElement.style.setProperty('--timeline-height', `${timeline.getBoundingClientRect().height}px`);
     }).observe(timeline);
     const panelToggle = document.getElementById('panel-toggle');
-    panelToggle.setAttribute('aria-expanded', 'true');
+    panelToggle.setAttribute('aria-expanded', String(!sidePanel.classList.contains('closed')));
     panelToggle.addEventListener('click', () => {
       const isClosed = sidePanel.classList.toggle('closed');
       panelToggle.setAttribute('aria-expanded', String(!isClosed));
@@ -453,10 +554,25 @@
       button.title = label;
     }).observe(document.getElementById('ndvi-panel'), {attributes:true, attributeFilter:['class']});
     const aiPromptPanel = document.getElementById('ai-prompt-panel');
-    document.getElementById('ai-mode-toggle').addEventListener('click', () => { aiPromptPanel.hidden = !aiPromptPanel.hidden; document.getElementById('ai-mode-toggle').setAttribute('aria-expanded',String(!aiPromptPanel.hidden)); if (!aiPromptPanel.hidden) document.getElementById('ai-prompt').focus(); });
-    document.getElementById('ai-panel-close').addEventListener('click', () => { aiPromptPanel.hidden = true; document.getElementById('ai-mode-toggle').setAttribute('aria-expanded','false'); });
+    const aiModeToggle = document.getElementById('ai-mode-toggle');
+    function setAiMode(open, focus=false) {
+      aiPromptPanel.hidden = !open;
+      document.body.classList.toggle('ai-mode',open);
+      aiModeToggle.setAttribute('aria-expanded',String(open));
+      if (open && focus && matchMedia('(max-width:999px)').matches) {
+        sidePanel.classList.add('closed');
+        panelToggle.setAttribute('aria-expanded','false');
+        document.querySelectorAll('.analysis.visible').forEach(panel=>panel.classList.remove('visible'));
+      }
+      if (focus) document.getElementById(open ? 'ai-prompt' : 'ai-mode-toggle').focus();
+    }
+    setAiMode(true);
+    aiModeToggle.addEventListener('click', () => setAiMode(aiPromptPanel.hidden || (matchMedia('(max-width:999px)').matches && (!sidePanel.classList.contains('closed') || document.querySelector('.analysis.visible'))),true));
+    document.getElementById('ai-panel-close').addEventListener('click', () => setAiMode(false,true));
     const locationSearch = document.getElementById('location-search');
     let locationSearchRevision=0;
+    window.cancelPendingLocationSearch=()=>{locationSearchRevision++;};
+    locationSearch.addEventListener('input',()=>{locationSearchRevision++;});
     async function notifyMapSearch(result,revision) {
       const parts=result.address_components || [];
       const city=parts.find(part=>part.types.includes('administrative_area_level_2'))?.long_name;
@@ -479,11 +595,20 @@
     async function searchLocation() {
       const query = locationSearch.value.trim();
       if (!query) return;
+      window.dismissOfficialRegionSuggestions?.();
       const revision=++locationSearchRevision;
+      if(!mapReady) {setStatus('Aguarde o carregamento do mapa.',true);return;}
+      const coordinateQuery=/^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$/.test(query);
+      if(!coordinateQuery && window.searchOfficialRegion) {
+        try {
+          if(await searchOfficialRegion(query,()=>revision===locationSearchRevision))return;
+        } catch(error) {if(revision===locationSearchRevision)setStatus(error.message,true);return;}
+        if(revision!==locationSearchRevision)return;
+      }
       if (openMap && mapReady) {
         const coordinates = query.split(',').map(value => Number(value.trim()));
         if (coordinates.length !== 2 || coordinates.some(value => !Number.isFinite(value)) || Math.abs(coordinates[0]) > 85 || Math.abs(coordinates[1]) > 180) {
-          setStatus('Informe latitude, longitude; por exemplo: -12.5, -55.7.', true); return;
+          setStatus('Cidade ou estado não encontrado. Use o nome com UF, ou latitude, longitude.', true); return;
         }
         map.setView(coordinates, 13); setStatus('Mapa centralizado nas coordenadas informadas.');
         document.dispatchEvent(new CustomEvent('alytha-map-search',{detail:{municipality_code:'',municipality_name:'Coordenadas pesquisadas'}}));return;
@@ -502,7 +627,10 @@
       } catch (error) { setStatus(error.message || 'N\u00e3o foi poss\u00edvel encontrar esse local.', true); }
     }
     document.getElementById('location-search-button').addEventListener('click', searchLocation);
-    locationSearch.addEventListener('keydown', event => { if (event.key === 'Enter') searchLocation(); });
+    locationSearch.addEventListener('keydown', event => {
+      if(event.isComposing || window.handleOfficialRegionKeydown?.(event))return;
+      if(event.key==='Enter') {event.preventDefault();searchLocation();}
+    });
     let map, fieldLayer, scenesLayer, ndviOverlay, ndviObjectUrl, mapReady = false, fieldLoaded = false, ndviConfigured = false;
     let openMap = false, uploadedGeojson;
     async function fieldGeojson() {
@@ -526,8 +654,8 @@
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       }).addTo(map);
-      fieldLayer = L.geoJSON(null, { style: { color: '#177447', weight: 3, fillColor: '#48a76f', fillOpacity: .28 } }).addTo(map);
-      locationSearch.placeholder = 'Coordenadas: latitude, longitude';
+      fieldLayer = L.geoJSON(null, { style: { color: '#e53935', weight: 3, fillColor: '#48a76f', fillOpacity: .28 } }).addTo(map);
+      locationSearch.placeholder = 'Cidade, estado ou latitude, longitude';
       mapReady = true;
       document.dispatchEvent(new Event('alytha-map-ready'));
       enableAreaTools();
@@ -540,10 +668,6 @@
     const fieldFile = document.getElementById('field-file');
     const dateFrom = document.getElementById('date-from');
     const dateTo = document.getElementById('date-to');
-    const now = new Date();
-    const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-    dateTo.value = iso(now);
-    const start = new Date(now); start.setMonth(start.getMonth() - 6); dateFrom.value = iso(start);
     document.getElementById('cloud').addEventListener('input', e => document.getElementById('cloud-value').textContent = `${e.target.value}%`);
     function setStatus(message, error = false) { status.textContent = message; status.classList.toggle('error', error); }
     function setNdviStatus(message, error = false) { ndviStatus.textContent = message; ndviStatus.classList.toggle('error', error); }
@@ -587,9 +711,9 @@
         const configResponse = await fetch('/api/config');
         const config = await readApiJson(configResponse);
         ndviConfigured = Boolean(config.ndvi_configured);
-        ndviButton.disabled = !ndviConfigured;
+        ndviButton.disabled = false;
         if (config.ndvi_configured) setNdviStatus('NDVI Sentinel-2 disponível · acompanhe o vigor da área selecionada.');
-        else setNdviStatus('Configure CDSE_CLIENT_ID e CDSE_CLIENT_SECRET no arquivo .env na raiz do projeto para processar o índice.');
+        else setNdviStatus('A consulta usará as leituras NDVI já salvas na base local.');
         if (!config.google_maps_api_key) { await initializeOpenMap(); return; }
         const callbackName = 'alythaMapsLoaded';
         window[callbackName] = async () => {
@@ -604,7 +728,7 @@
               ...(config.google_maps_map_id ? { mapId: config.google_maps_map_id } : {})
             });
             fieldLayer = new Data({ map });
-            fieldLayer.setStyle({ strokeColor: '#177447', strokeWeight: 3, fillColor: '#48a76f', fillOpacity: .28, clickable: false });
+            fieldLayer.setStyle({ strokeColor: '#e53935', strokeWeight: 3, fillColor: '#48a76f', fillOpacity: .28, clickable: false });
             mapReady = true;
             document.dispatchEvent(new Event('alytha-map-ready'));
             enableAreaTools();
@@ -644,53 +768,35 @@
       } catch (error) { setStatus(error.message, true); }
       finally { actionButton.disabled = false; }
     }
-    fieldFile.addEventListener('change', async () => {
-      const file = fieldFile.files?.[0];
-      if (!file) return;
-      try {
-        if (!mapReady) throw new Error('Aguarde o carregamento do mapa.');
-        if (file.size > 2_000_000) throw new Error('O GeoJSON precisa ter menos de 2 MB nesta PoC.');
-        const geojson = JSON.parse(await file.text());
-        const features = geojson.type === 'FeatureCollection' ? geojson.features : [geojson.type === 'Feature' ? geojson : { type: 'Feature', properties: {}, geometry: geojson }];
-        if (features.length !== 1 || !['Polygon', 'MultiPolygon'].includes(features[0]?.geometry?.type)) throw new Error('Envie um polígono GeoJSON único (Polygon ou MultiPolygon).');
-        selectAnalysisArea(geojson, file.name);
-        setStatus('GeoJSON carregado nesta sessão. Escolha o período para consultar imagens ou calcular NDVI.');
-      } catch (error) { setStatus(error.message, true); }
-    });
     ndviButton.addEventListener('click', async () => {
+      if(!ensureAnalysisArea()) {setNdviStatus(status.textContent,true);return;}
       document.querySelector('#ndvi-panel .analysis-subtitle').textContent = 'Evolução da vegetação na área · leituras de até 5 dias. Nuvens e sombras podem impedir a avaliação de parte da área.';
       document.getElementById('ndvi-panel').classList.add('visible');
-      if (!mapReady || !fieldLayer || !fieldLoaded) { setNdviStatus('Desenhe uma área ou carregue um GeoJSON antes de calcular a série NDVI.', true); return; }
       if (!dateFrom.value || !dateTo.value || dateFrom.value > dateTo.value) { setNdviStatus('Informe um período válido.', true); return; }
-      ndviButton.disabled = true; setNdviStatus('Calculando a série temporal no Copernicus Sentinel Hub…');
+      ndviButton.disabled = true; setNdviStatus('Consultando leituras de vigor e a base local…');
+      clearLocalNdvi();
       try {
         const response = await fetch('/api/ndvi-series', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ geojson: await fieldGeojson(), area_id: savedAreaId, from: dateFrom.value, to: dateTo.value }) });
         const result = await readApiJson(response);
         if (!response.ok) throw new Error(result.error || 'Falha no processamento.');
-        renderNdvi(result.points || []);
+        showNdviResult(result);
         await refreshSavedHistory();
-        setNdviStatus(result.points?.length ? `${result.points.length} leituras disponíveis. Consulte cada data para ver quanto da área pôde ser avaliado. Fonte: satélite Sentinel-2.` : 'Não foi possível avaliar a vegetação neste período. Nuvens, sombras ou falta de imagens podem explicar a ausência de leitura.');
       } catch (error) { setNdviStatus(error.message, true); }
       finally { ndviButton.disabled = false; }
     });
     button.addEventListener('click', async () => {
-      if (!mapReady || !fieldLayer || !fieldLoaded) { setStatus('Desenhe uma área ou carregue um GeoJSON antes de consultar imagens.', true); return; }
+      if(!ensureAnalysisArea())return;
       if (!dateFrom.value || !dateTo.value || dateFrom.value > dateTo.value) { setStatus('Informe um período válido.', true); return; }
       button.disabled = true; setStatus('Consultando o catálogo público Copernicus…');
       try {
         const response = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ geojson: await fieldGeojson(), area_id: savedAreaId, from: dateFrom.value, to: dateTo.value, max_cloud: Number(document.getElementById('cloud').value) }) });
         const result = await readApiJson(response);
         if (!response.ok) throw new Error(result.error || 'Falha na consulta.');
-        if (scenesLayer) { if (openMap) map.removeLayer(scenesLayer); else scenesLayer.setMap(null); }
         const features = result.features || [];
-        if (openMap) scenesLayer = L.geoJSON(result, { style: { color: '#b66a17', weight: 2, fillOpacity: 0 } }).addTo(map);
-        else {
-          scenesLayer = new google.maps.Data({ map }); scenesLayer.addGeoJson(result);
-          scenesLayer.setStyle({ strokeColor: '#b66a17', strokeWeight: 2, fillOpacity: 0, clickable: false });
-        }
+        renderSceneFootprints(result);
         renderItems(features);
         await refreshSavedHistory();
-        setStatus(`Consulta concluída. ${features.length} cena(s) retornada(s); nenhuma imagem foi baixada.`);
+        setStatus(result.mode==='local_cache' ? `${result.message} ${features.length} cena(s).` : `Consulta concluída. ${features.length} cena(s) retornada(s)${result.catalog_limited?' · resultado limitado; reduza o período para detalhar':''}; nenhuma imagem foi baixada.`);
       } catch (error) { setStatus(`Não foi possível consultar o catálogo: ${error.message}`, true); }
       finally { button.disabled = false; }
     });

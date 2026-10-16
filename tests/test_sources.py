@@ -102,4 +102,42 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(result['features'][0]['properties']['native_resolution_m'],30)
         self.assertTrue(result['features'][0]['properties']['overview'])
 
+    def test_state_layer_clips_neighbour_pixels_and_skips_outside_view(self):
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_origin
+        from shapely.geometry import shape
+        from app import localities
+        file=Path(self.temp.name)/'state.tif'
+        with rasterio.open(file,'w',driver='GTiff',height=40,width=40,count=1,dtype='uint8',crs='EPSG:4326',transform=from_origin(-55.2,-12.49,.00025,.00025)) as ds:
+            ds.write(np.full((40,40),39,dtype='uint8'),1)
+        geometry={'type':'Polygon','coordinates':[[[-55.2,-12.5],[-55.195,-12.5],[-55.195,-12.49],[-55.2,-12.49],[-55.2,-12.5]]]}
+        boundary={'type':'FeatureCollection','features':[{'type':'Feature','geometry':geometry,'properties':{}}]}
+        original=rasterio.open
+        with patch.object(localities,'location_data',return_value=boundary) as lookup,patch.object(rasterio,'open',side_effect=lambda url:original(file)) as read:
+            result=sources.mapbiomas({'bounds':[-55.2,-12.5,-55.19,-12.49],'state_code':'52'})
+            self.assertEqual(len(result['features']),1)
+            self.assertTrue(shape(geometry).buffer(1e-9).covers(shape(result['features'][0]['geometry'])))
+            lookup.assert_called_with('/api/locations/boundaries/states/52')
+            outside=sources.mapbiomas({'bounds':[-56,-13,-55.9,-12.9],'state_code':'52'})
+            self.assertEqual(outside['features'],[])
+            read.assert_called_once()
+
+    def test_map_limit_keeps_large_fields_found_after_first_200_components(self):
+        import numpy as np
+        import rasterio
+        from rasterio.transform import from_origin
+        raster=np.zeros((240,240),dtype='uint8')
+        for row in range(17):
+            for col in range(17):raster[row*10:row*10+9,col*10:col*10+9]=39
+        raster[180:230,180:230]=39
+        file=Path(self.temp.name)/'many-fields.tif'
+        with rasterio.open(file,'w',driver='GTiff',height=240,width=240,count=1,dtype='uint8',crs='EPSG:4326',transform=from_origin(-55.2,-12.49,.00025,.00025)) as ds:ds.write(raster,1)
+        original=rasterio.open
+        with patch.object(rasterio,'open',side_effect=lambda url:original(file)):
+            result=sources.mapbiomas({'bounds':[-55.2,-12.55,-55.14,-12.49]})
+        self.assertEqual(len(result['features']),200)
+        self.assertEqual(result['candidate_count'],290)
+        self.assertGreater(result['features'][0]['properties']['area_ha'],100)
+
 if __name__=='__main__': unittest.main()

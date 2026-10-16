@@ -8,6 +8,7 @@ import math
 import os
 import argparse
 import re
+from datetime import date
 from argparse import Namespace
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,8 +17,16 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib.request import Request, urlopen
 
 from .catalog_search import DEFAULT_COLLECTION, DEFAULT_ENDPOINT, extract_geometry, request_items, validate_date
-from .localities import location_data
+from .catalog_search import consult_items, CatalogUnavailable
+from .localities import location_data, search as search_localities
 from . import storage, data_sources, municipalities, inactive_soy, research, assistant, municipal_activity, satellite_learning, spatial_activity, crop_monitoring, map_layers
+from . import learning_cycle
+from . import regional_learning
+from . import visual_learning
+from . import regional_scan
+from . import cdse_access
+from . import local_ndvi
+from . import planting_readiness
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,31 +159,43 @@ def request_ndvi_map(geometry, acquisition_date):
     request = Request(
         "https://sh.dataspace.copernicus.eu/process/v1",
         data=json.dumps(process_request).encode("utf-8"),
-        headers={"Authorization": f"Bearer {get_cdse_access_token()}", "Content-Type": "application/json", "Accept": "image/png"},
+        headers={"Content-Type": "application/json", "Accept": "image/png"},
         method="POST",
     )
-    with urlopen(request, timeout=120) as response:
+    with cdse_access.RATE.open(request,urlopen,prepare=lambda req:req.add_header('Authorization','Bearer '+get_cdse_access_token())) as response:
         image = response.read()
     return image, bbox
 
 
 def get_cdse_access_token():
+    with cdse_access.RATE.lock:
+        return _cached_cdse_access_token()
+
+
+def _cached_cdse_access_token():
     env = read_app_env()
     client_id = env.get("CDSE_CLIENT_ID", "").strip()
     client_secret = env.get("CDSE_CLIENT_SECRET", "").strip()
     if not client_id or not client_secret:
         raise ValueError("Configure CDSE_CLIENT_ID e CDSE_CLIENT_SECRET no arquivo .env na raiz do projeto para processar NDVI.")
+    credentials=(client_id,client_secret)
+    token=cdse_access.TOKEN
+    if token['credentials']==credentials and token['value'] and cdse_access.RATE.clock()<token['expires_at']:
+        return token['value']
     request = Request(
         CDSE_TOKEN_URL,
         data=urlencode({"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}).encode("utf-8"),
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urlopen(request, timeout=30) as response:
+    with cdse_access.RATE.open(request,urlopen,timeout=30,milliseconds=False) as response:
         token_response = json.load(response)
     access_token = token_response.get("access_token")
     if not access_token:
         raise ValueError("O serviço Copernicus não retornou um token de acesso.")
+    try:ttl=max(0,float(token_response.get('expires_in',0))-30)
+    except (ValueError,TypeError):ttl=0
+    token.update(credentials=credentials,value=access_token,expires_at=cdse_access.RATE.clock()+ttl if math.isfinite(ttl) else 0)
     return access_token
 
 
@@ -207,10 +228,10 @@ def request_ndvi_series(geometry, date_from, date_to):
     request = Request(
         CDSE_STATS_URL,
         data=json.dumps(stats_request).encode("utf-8"),
-        headers={"Authorization": f"Bearer {get_cdse_access_token()}", "Content-Type": "application/json", "Accept": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
-    with urlopen(request, timeout=120) as response:
+    with cdse_access.RATE.open(request,urlopen,prepare=lambda req:req.add_header('Authorization','Bearer '+get_cdse_access_token())) as response:
         payload = json.load(response)
     points = []
     for interval in payload.get("data", []):
@@ -240,7 +261,99 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
+        region_path=urlsplit(self.path)
+        if region_path.path == '/api/health':
+            from . import health
+            try:self._send_json(health.snapshot())
+            except Exception:self._send_json({'status':'unavailable','database':'unreachable'},status=503)
+            return
+        work_match = re.fullmatch(r'/api/assistant/work/([a-f0-9]{64})', region_path.path)
+        if work_match:
+            from . import analysis_queue
+            try:
+                queued = analysis_queue.get(work_match[1])
+            except ValueError:
+                queued = None
+            if queued:
+                self._send_json(queued)
+                return
+            saved = storage.source_snapshot('assistant-work:v1:' + work_match[1])
+            self._send_json(saved['result'] if saved else {'error':'Trabalho não encontrado.'}, status=200 if saved else 404)
+            return
+        if region_path.path == '/api/local-inventory':
+            from . import local_inventory
+            try:
+                query = parse_qs(region_path.query)
+                result = local_inventory.inventory({key: query[key][0] for key in
+                    ('dataset_id', 'municipality_code', 'state_code', 'map_date') if key in query})
+                self._send_json(result)
+            except ValueError as exc:
+                self._send_json({'error': str(exc)}, status=400)
+            return
+        scan_match=re.fullmatch(r'/api/regional-scans/([a-f0-9]{64})',region_path.path)
+        if scan_match:
+            try: self._send_json(regional_scan.get(scan_match[1]))
+            except ValueError as exc: self._send_json({'error':str(exc)},status=400)
+            return
+        if region_path.path=='/api/locations/search':
+            try: self._send_json(search_localities(parse_qs(region_path.query).get('q',[''])[0]))
+            except ValueError as exc: self._send_json({'error':str(exc)},status=400)
+            except Exception: self._send_json({'error':'Não foi possível consultar localidades no IBGE. Tente novamente.'},status=502)
+            return
         parsed=urlsplit(self.path)
+        visual_job=re.fullmatch(r'/api/visual-learning/([a-f0-9]{64})',parsed.path)
+        if visual_job:
+            try:self._send_json(visual_learning.get(visual_job[1]))
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        visual_asset=re.fullmatch(r'/api/visual-learning/assets/([a-f0-9]{64})\.png',parsed.path)
+        if visual_asset:
+            try:
+                metadata,path=visual_learning.asset(visual_asset[1])
+                binary=path.read_bytes()
+                self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(len(binary)))
+                self.end_headers();self.wfile.write(binary)
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
+            except ConnectionError:pass
+            return
+        if parsed.path=='/api/regional-learning':
+            self._send_json(regional_learning.status_snapshot());return
+        base_city=re.fullmatch(r'/api/regional-learning/cities/([0-9]{7})',parsed.path)
+        if base_city:
+            try:self._send_json(regional_learning.city_review(base_city[1]))
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        base_file=re.fullmatch(r'/api/regional-learning/files/(manifest\.json|observacoes\.csv|janelas_ml\.csv|caracteristicas_visuais\.csv|caracteristicas_espaciais\.csv|registros_campo\.json)',parsed.path)
+        if base_file:
+            latest=storage.source_snapshot('regional-learning:latest')
+            if not latest:self._send_json({'error':'Base ainda não consolidada.'},status=404);return
+            path=Path(latest['result']['folder'])/base_file[1]
+            try:
+                with path.open('rb') as stream:
+                    import shutil
+                    self.send_response(200)
+                    self.send_header('Content-Type','text/csv; charset=utf-8' if path.suffix=='.csv' else 'application/json; charset=utf-8')
+                    self.send_header('Content-Disposition','attachment; filename="'+path.name+'"')
+                    self.send_header('Content-Length',str(path.stat().st_size));self.end_headers()
+                    shutil.copyfileobj(stream,self.wfile)
+            except FileNotFoundError:self._send_json({'error':'Arquivo não disponível.'},status=404)
+            except ConnectionError:pass
+            return
+        if parsed.path=='/api/learning-cycle':
+            try:
+                query=parse_qs(parsed.query)
+                limit=int(query.get('limit',['50'])[0])
+                if not 1<=limit<=200:raise ValueError('Limite de planos inválido.')
+                plans=learning_cycle.plans(municipality_code=query.get('municipality_code',[None])[0],
+                                          area_key=query.get('area_key',[None])[0],limit=limit)
+                self._send_json(plans)
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        learning_match=re.fullmatch(r'/api/learning-cycle/([a-f0-9]{64})',parsed.path)
+        if learning_match:
+            try:self._send_json(learning_cycle.get(learning_match[1]))
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
+            return
         crop_map_match=re.fullmatch(r'/api/sources/mapbiomas/jobs/([a-f0-9]{64})', parsed.path)
         if crop_map_match:
             try: self._send_json(map_layers.get(crop_map_match[1]))
@@ -269,10 +382,14 @@ class Handler(SimpleHTTPRequestHandler):
             try: self._send_json(research.restore_history(match[1]))
             except ValueError as exc: self._send_json({'error':str(exc)},status=400)
             return
-        if self.path=='/api/research/status':
+        if parsed.path=='/api/research/status':
             reference=storage.source_snapshot('research:sorriso:pilot')
             env=read_app_env()
-            self._send_json({'assistant':assistant.configuration(env),'openai_configured':bool(env.get('OPENAI_API_KEY')),'ml':research.model_status(),'satellite':satellite_learning.status(),'pilot':reference['result'] if reference else None})
+            code=parse_qs(parsed.query).get('municipality_code',['5107925'])[0]
+            try:
+                municipalities.key(code)
+                self._send_json({'assistant':assistant.configuration(env),'openai_configured':bool(env.get('OPENAI_API_KEY')),'ml':research.model_status(),'satellite':satellite_learning.status(code),'pilot':reference['result'] if reference and code=='5107925' else None})
+            except ValueError as exc:self._send_json({'error':str(exc)},status=400)
             return
         if self.path=='/api/research/events':
             self._send_json(research.events());return
@@ -329,6 +446,58 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        if self.path == '/api/assistant/jobs':
+            from . import analysis_queue
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=100_000:raise ValueError('Pedido de análise inválido.')
+                data=json.loads(self.rfile.read(size))
+                if not isinstance(data,dict):raise ValueError('Informe um objeto JSON.')
+                self._send_json(analysis_queue.submit(data),status=202)
+            except (ValueError,TypeError) as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        if self.path=='/api/visual-learning':
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=2000:raise ValueError('Pedido visual inválido.')
+                data=json.loads(self.rfile.read(size))
+                if not isinstance(data,dict):raise ValueError('Informe um objeto JSON.')
+                self._send_json(visual_learning.start(data),status=202)
+            except (ValueError,TypeError) as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        if self.path in ('/api/regional-learning/build','/api/regional-learning/configure'):
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=2000:raise ValueError('Pedido regional inválido.')
+                data=json.loads(self.rfile.read(size))
+                if not isinstance(data,dict):raise ValueError('Informe um objeto JSON.')
+                result=regional_learning.start_build() if self.path.endswith('/build') else regional_learning.configure(data)
+                self._send_json(result,status=202 if self.path.endswith('/build') else 200)
+            except (ValueError,TypeError) as exc:self._send_json({'error':str(exc)},status=400)
+            return
+        if self.path in ('/api/learning-cycle','/api/learning-cycle/configure','/api/learning-cycle/review','/api/learning-cycle/export'):
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=20_000:raise ValueError('Pedido de acompanhamento inválido.')
+                data=json.loads(self.rfile.read(size))
+                if not isinstance(data,dict):raise ValueError('Informe um objeto JSON.')
+                operations={'/api/learning-cycle':learning_cycle.enroll,
+                            '/api/learning-cycle/configure':learning_cycle.configure,
+                            '/api/learning-cycle/review':learning_cycle.review}
+                result=learning_cycle.export() if self.path.endswith('/export') else operations[self.path](data)
+                self._send_json(result)
+            except (ValueError,TypeError) as exc:self._send_json({'error':str(exc)},status=400)
+            except Exception:self._send_json({'error':'Não foi possível atualizar o acompanhamento contínuo.'},status=502)
+            return
+        if self.path=='/api/regional-scans':
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=2000: raise ValueError('Pedido de região inválido.')
+                job=regional_scan.start(json.loads(self.rfile.read(size)))
+                self._send_json(job,status=202 if job['status']=='loading' else 200)
+            except ValueError as exc: self._send_json({'error':str(exc)},status=400)
+            except Exception: self._send_json({'error':'Não foi possível iniciar a varredura regional.'},status=502)
+            return
         if self.path == '/api/sources/mapbiomas/jobs':
             try:
                 size = int(self.headers.get('Content-Length','0'))
@@ -395,6 +564,17 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/ndvi-series":
             self._handle_ndvi_series()
             return
+        if self.path == '/api/planting-readiness':
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=2_000_000:raise ValueError('Tamanho do pedido inválido.')
+                data=json.loads(self.rfile.read(size))
+                if not isinstance(data,dict):raise ValueError('Pedido inválido.')
+                geometry=extract_geometry(data.get('geojson'))
+                self._send_json(planting_readiness.consult(geometry,data.get('field_inputs',{})))
+            except (ValueError,TypeError,OSError) as exc:
+                self._send_json({'error':str(exc)},status=400)
+            return
         if self.path == "/api/ndvi-map":
             self._handle_ndvi_map()
             return
@@ -426,9 +606,12 @@ class Handler(SimpleHTTPRequestHandler):
                 max_cloud=max_cloud,
                 limit=100,
             )
-            result = request_items(args, geometry)
-            storage.save_analysis(area_id, 'catalog', {'from': date_from, 'to': date_to, 'max_cloud': max_cloud}, result)
+            result = consult_items(args, geometry, request_items)
+            if result.get('mode') != 'local_cache':
+                storage.save_analysis(area_id, 'catalog', {'from': date_from, 'to': date_to, 'max_cloud': max_cloud}, result)
             self._send_json(result)
+        except CatalogUnavailable as exc:
+            self._send_json({'error': str(exc)}, status=502)
         except (OSError, json.JSONDecodeError, ValueError, HTTPError, URLError, TimeoutError) as exc:
             self._send_json({"error": str(exc)}, status=400)
 
@@ -448,10 +631,22 @@ class Handler(SimpleHTTPRequestHandler):
             start, end = validate_date(date_from, "Data inicial"), validate_date(date_to, "Data final")
             if end < start:
                 raise ValueError("A data final deve ser igual ou posterior à inicial.")
-            if (end - start).days > 365:
-                raise ValueError("Selecione no máximo um ano por consulta nesta PoC.")
-            result = request_ndvi_series(geometry, date_from, date_to)
-            storage.save_analysis(area_id, 'ndvi', {'from': date_from, 'to': date_to}, result)
+            if start < date(2018,1,1) or end > inactive_soy.today():
+                raise ValueError('Escolha um período entre 01/01/2018 e hoje.')
+            credentials = read_app_env()
+            result = local_ndvi.consult(geometry, date_from, date_to, request_ndvi_series,
+                configured=all(credentials.get(key) for key in ('CDSE_CLIENT_ID','CDSE_CLIENT_SECRET')))
+            if result.get('mode') == 'remote':
+                storage.save_analysis(area_id, 'ndvi', {'from': date_from, 'to': date_to}, result)
+            # Reuse saved years of the same polygon; never collect new images here.
+            saved, _, _ = local_ndvi.local_series(geometry, '2018-01-01', date_to)
+            for series in result.get('series', []):
+                match = next((item for item in saved if item['id'] == series['id']), None)
+                if match:
+                    series['history_points'] = match['history_points']
+            exact = next((item for item in saved if item['scope'] == 'exact_area'), None)
+            if exact:
+                result['history_points'] = exact['history_points']
             self._send_json(result)
         except HTTPError as exc:
             message = exc.read(2000).decode("utf-8", errors="replace")
@@ -506,9 +701,17 @@ def main():
     parser = argparse.ArgumentParser(description="Monitoramento de lotes: servidor local independente.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--no-workers", action="store_true", help="Não iniciar o monitor automático ao abrir o servidor.")
     args = parser.parse_args()
     address = (args.host, args.port)
+    # Migrate once before serving requests or starting background work.
+    with storage.connect():
+        pass
     server = ThreadingHTTPServer(address, Handler)
+    if not args.no_workers:
+        learning_cycle.start_worker()
+    else:
+        print("Monitor automático pausado (--no-workers).")
     print(f"PoC Alytha disponível em http://{address[0]}:{address[1]}")
     print("Servidor local; Ctrl+C para encerrar.")
     try:
@@ -516,6 +719,10 @@ def main():
     except KeyboardInterrupt:
         print("\nServidor encerrado.")
     finally:
+        learning_cycle.STOP.set()
+        learning_cycle.WAKE.set()
+        regional_scan.STOP.set()
+        regional_scan.POOL.shutdown(wait=False,cancel_futures=True)
         server.server_close()
 
 

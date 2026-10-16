@@ -60,19 +60,24 @@ def read_raster(path, grid):
     return ndvi,valid
 
 
+def cache_path(geometry,grid,period):
+    key = hashlib.sha256(json.dumps({'geometry':geometry,'crs':grid['crs'],'bounds':grid['bounds'],'period':period,'evalscript':EVALSCRIPT},sort_keys=True).encode()).hexdigest()
+    return ROOT/(key+'.tif')
+
+
 def fetch(geometry, grid, period):
     from .web_app import get_cdse_access_token
-    key = hashlib.sha256(json.dumps({'geometry':geometry,'crs':grid['crs'],'bounds':grid['bounds'],'period':period,'evalscript':EVALSCRIPT},sort_keys=True).encode()).hexdigest()
     ROOT.mkdir(parents=True,exist_ok=True)
-    path = ROOT/(key+'.tif')
+    path = cache_path(geometry,grid,period)
     with LOCK:
         if path.is_file():return read_raster(path,grid)
         payload = {'input':{'bounds':{'bbox':grid['bounds'],'properties':{'crs':'http://www.opengis.net/def/crs/EPSG/0/'+grid['crs'].split(':')[1]}},
                             'data':[{'type':'sentinel-2-l2a','dataFilter':{'timeRange':{'from':period['from']+'T00:00:00Z','to':period['to']+'T23:59:59Z'},'maxCloudCoverage':80,'mosaickingOrder':'leastCC'}}]},
                    'output':{'width':grid['width'],'height':grid['height'],'responses':[{'identifier':'default','format':{'type':'image/tiff'}}]},'evalscript':EVALSCRIPT}
+        from . import cdse_access
         request = Request('https://sh.dataspace.copernicus.eu/process/v1',data=json.dumps(payload).encode(),
-                          headers={'Authorization':'Bearer '+get_cdse_access_token(),'Content-Type':'application/json','Accept':'image/tiff'},method='POST')
-        with urlopen(request,timeout=120) as response:
+                          headers={'Content-Type':'application/json','Accept':'image/tiff'},method='POST')
+        with cdse_access.RATE.open(request,urlopen,prepare=lambda req:req.add_header('Authorization','Bearer '+get_cdse_access_token())) as response:
             binary = response.read(20_000_001)
         if len(binary)>20_000_000:raise ValueError('A imagem excedeu o limite de processamento deste recorte.')
         temporary = path.with_suffix('.tmp')

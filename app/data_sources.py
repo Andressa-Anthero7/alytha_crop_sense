@@ -3,7 +3,9 @@ import csv
 import gzip
 import io
 import json
+import heapq
 import math
+import time
 import re
 from datetime import datetime, timezone, timedelta
 from urllib.request import Request, urlopen
@@ -59,13 +61,56 @@ def mapbiomas_parameters(data):
     if not isinstance(bounds,list) or len(bounds)!=4 or any(type(v) not in (float,int) or not math.isfinite(v) for v in bounds):
         raise ValueError('Informe os limites da área visível no mapa.')
     west,south,east,north = bounds
+    if data.get('municipality_code') or data.get('state_code'):
+        # Fit-to-region viewports may include ocean/foreign territory at low zoom.
+        # The administrative mask still limits the raster to the chosen region.
+        west,south,east,north=max(-75,west),max(-35,south),min(-30,east),min(6,north)
+        bounds=[west,south,east,north]
     if not (-75<=west<east<=-30 and -35<=south<north<=6):
         raise ValueError('Escolha uma área no Brasil e aproxime o mapa.')
     code = data.get('municipality_code') or None
     if code:
         from .municipalities import key
         key(code)
-    return {'year':year,'class_id':class_id,'bounds':list(bounds),'municipality_code':code}
+    state=data.get('state_code') or None
+    if state and (not isinstance(state,str) or state not in ('11','12','13','14','15','16','17','21','22','23','24','25','26','27','28','29','31','32','33','35','41','42','43','50','51','52','53')):
+        raise ValueError('Estado inválido.')
+    if state and code and not code.startswith(state):raise ValueError('O município não pertence ao estado informado.')
+    params={'year':year,'class_id':class_id,'bounds':list(bounds),'municipality_code':code}
+    if state:params['state_code']=state
+    if state and not code:
+        saved=storage.source_snapshot('ibge-boundary:v1:states:'+state)
+        extent=saved['result'].get('bounds') if saved else None
+        if extent and bounds_cover(bounds,extent):
+            params['bounds']=extent
+            params['full_region']='state'
+    return params
+
+
+def bounds_cover(outer,inner):
+    return outer[0]<=inner[0] and outer[1]<=inner[1] and outer[2]>=inner[2] and outer[3]>=inner[3]
+
+
+def mapbiomas_cache_key(data):
+    return 'mapbiomas:v5:'+json.dumps([data['year'],data['class_id'],data['bounds'],data.get('municipality_code')]+([data['state_code']] if data.get('state_code') else []))
+
+
+def cached_mapbiomas(data):
+    """Reuse only identical coverage; a partial or coarser viewport never substitutes detail."""
+    key=mapbiomas_cache_key(data)
+    saved=storage.source_snapshot(key)
+    if saved:return saved['result']
+    if data.get('full_region')!='state':return None
+    # Promote previously prepared full-state results without downloading the raster.
+    with storage.connect() as db:
+        rows=db.execute("SELECT result FROM source_snapshots WHERE cache_key LIKE 'crop-map:v1:%' AND json_extract(result,'$.status')='ready' AND json_extract(result,'$.parameters.state_code')=? AND json_extract(result,'$.parameters.year')=? AND json_extract(result,'$.parameters.class_id')=? AND json_extract(result,'$.result.candidate_count') IS NOT NULL ORDER BY fetched_at DESC",(data['state_code'],data['year'],data['class_id'])).fetchall()
+    for row in rows:
+        job=json.loads(row['result']);params=job['parameters']
+        if not params.get('municipality_code') and bounds_cover(params['bounds'],data['bounds']):
+            result=job['result']
+            storage.source_snapshot(key,result)
+            return result
+    return None
 
 
 def _mapbiomas_result(features, year, class_id, overview, resolution_m):
@@ -74,7 +119,10 @@ def _mapbiomas_result(features, year, class_id, overview, resolution_m):
 
 
 def mapbiomas(data):
+    started=time.perf_counter()
     data = mapbiomas_parameters(data)
+    cached=cached_mapbiomas(data)
+    if cached:return {**cached,'delivery':{'cache_hit':True,'seconds':round(time.perf_counter()-started,4)}}
     try:
         import numpy as np
         import rasterio
@@ -85,16 +133,18 @@ def mapbiomas(data):
     except ImportError as exc:
         raise ValueError('Instale requirements-geospatial.txt para processar MapBiomas.') from exc
     year, class_id, bounds = data['year'], data['class_id'], data['bounds']
-    key = 'mapbiomas:v4:' + json.dumps([year,class_id,bounds,data.get('municipality_code')])
-    cached = storage.source_snapshot(key)
-    if cached: return cached['result']
+    key = mapbiomas_cache_key(data)
     municipal_geometry = None
     raster_bounds = bounds
-    if data.get('municipality_code'):
+    if data.get('municipality_code') or data.get('state_code'):
         from .municipalities import boundary
         from shapely.ops import unary_union
         from shapely.geometry import box
-        boundary_data = boundary(data['municipality_code'])
+        if data.get('municipality_code'):
+            boundary_data = boundary(data['municipality_code'])
+        else:
+            from .localities import location_data
+            boundary_data=location_data('/api/locations/boundaries/states/'+data['state_code'])
         municipal_geometry = unary_union([shape(f['geometry']) for f in boundary_data['features']]).intersection(box(*bounds))
         if municipal_geometry.is_empty:
             result = _mapbiomas_result([], year, class_id, False, 30)
@@ -104,6 +154,8 @@ def mapbiomas(data):
         raster_bounds = municipal_geometry.bounds
     url = MAPBIOMAS_URL.format(year=year)
     features = []
+    largest=[];candidate_number=0
+    raster_started=time.perf_counter()
     with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN='EMPTY_DIR', GDAL_HTTP_TIMEOUT='30', GDAL_HTTP_MAX_RETRY='1', CPL_VSIL_CURL_ALLOWED_EXTENSIONS='.tif'):
         with rasterio.open(url) as ds:
             from rasterio.windows import Window
@@ -113,6 +165,8 @@ def mapbiomas(data):
             factor = max(1, math.sqrt(window.width*window.height/1_000_000))
             width, height = max(1,int(window.width/factor)), max(1,int(window.height/factor))
             raster = ds.read(1,window=window,out_shape=(height,width),resampling=Resampling.nearest)
+            raster_seconds=time.perf_counter()-raster_started
+            processing_started=time.perf_counter()
             raster_transform = ds.window_transform(window) * ds.transform.scale(window.width/width,window.height/height)
             resolution_m = round(30*max(window.width/width,window.height/height))
             overview = factor > 1
@@ -125,9 +179,16 @@ def mapbiomas(data):
                 area_ha = shape(transform_geom(ds.crs,'EPSG:6933',geometry)).area/10000
                 if area_ha < 5: continue
                 simplified = mapping(shape(geometry).simplify(ds.res[0],preserve_topology=True)) if municipal_geometry is None else geometry
-                features.append({'type':'Feature','geometry':simplified,'properties':{'source':'MapBiomas','collection':11,'year':year,'class_id':class_id,'class_name':CLASSES[class_id],'resolution_m':resolution_m,'native_resolution_m':30,'overview':overview,'area_ha':round(area_ha,2),'source_url':url,'historical':True,'clipped_to_view':True}})
-                if len(features)>=200: break
+                feature={'type':'Feature','geometry':simplified,'properties':{'source':'MapBiomas','collection':11,'year':year,'class_id':class_id,'class_name':CLASSES[class_id],'resolution_m':resolution_m,'native_resolution_m':30,'overview':overview,'area_ha':round(area_ha,2),'source_url':url,'historical':True,'clipped_to_view':True}}
+                candidate_number+=1
+                candidate=(area_ha,candidate_number,feature)
+                if len(largest)<200:heapq.heappush(largest,candidate)
+                elif area_ha>largest[0][0]:heapq.heapreplace(largest,candidate)
+    features=[item[2] for item in sorted(largest,reverse=True)]
     result = _mapbiomas_result(features, year, class_id, overview, resolution_m)
+    result['candidate_count']=candidate_number
+    result['selection']='até 200 maiores manchas da cultura no recorte visível; não é cobertura integral'
+    result['timing']={'raster_seconds':round(raster_seconds,3),'processing_seconds':round(time.perf_counter()-processing_started,3),'total_seconds':round(time.perf_counter()-started,3)}
     storage.source_snapshot(key,result)
     return result
 

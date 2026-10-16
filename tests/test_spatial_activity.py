@@ -12,6 +12,27 @@ from app import spatial_activity as spatial, spatial_raster, storage
 
 
 class SpatialTests(unittest.TestCase):
+    def test_growth_sequence_maps_regular_blocks_before_and_after(self):
+        cube=np.full((3,30,30),.2,dtype=np.float32)
+        cube[1,:,:15]=.6;cube[2,:,:]=.7
+        result=spatial.analyze_pixels([(a,np.ones((30,30),dtype=bool)) for a in cube],self.grid)
+        stages=result['growth_sequence']['stages']
+        self.assertEqual([s['area_ha'] for s in stages],[4.5,4.5])
+        self.assertEqual([s['features'][0]['properties']['growth_stage'] for s in stages],['early','late'])
+        for stage in stages:
+            self.assertEqual(stage['features'][0]['properties']['shape_pattern'],'bloco regular')
+            self.assertEqual(stage['features'][0]['properties']['rectangularity'],1)
+        self.assertTrue(shape(stages[0]['features'][0]['geometry']).intersection(shape(stages[1]['features'][0]['geometry'])).area<1e-14)
+
+    def test_reversed_or_cloudy_gain_is_not_early_growth(self):
+        cube=np.full((3,30,30),.2,dtype=np.float32);cube[1,:,:]=.6
+        result=spatial.analyze_pixels([(a,np.ones((30,30),dtype=bool)) for a in cube],self.grid)
+        self.assertFalse(result['growth_sequence']['geojson']['features'])
+        cube[2,:,:]=.7
+        masks=[np.ones((30,30),dtype=bool) for _ in range(3)];masks[1][:,:10]=False
+        result=spatial.analyze_pixels(list(zip(cube,masks)),self.grid)
+        self.assertAlmostEqual(result['growth_sequence']['stages'][0]['area_ha'],6)
+
     def setUp(self):
         self.grid={'mask':np.ones((30,30),dtype=bool),'crs':'EPSG:32721','transform':from_origin(500000,8600000,10,10),'width':30,'height':30}
     def images(self):

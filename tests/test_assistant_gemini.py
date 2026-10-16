@@ -96,6 +96,13 @@ class GeminiTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'não concluiu'):
             self.call(finish='MAX_TOKENS')
 
+    def test_unexecuted_map_promise_is_not_shown_as_an_action(self):
+        answer={**self.answer,'answer':'Vou destacar agora as áreas de soja em Goiás no mapa.'}
+        for action in ({'kind':'none','class_ids':[]},{'kind':'filter_crops','class_ids':[39]}):
+            response,_=self.call({**answer,'action':action})
+            self.assertEqual(response['action']['kind'],'none')
+            self.assertIn('Não executei',response['answer'])
+
     def test_invented_evidence_and_malformed_actions_are_rejected(self):
         for answer in ({**self.answer,'evidence_ids':['invented']},{**self.answer,'evidence_ids':[{}]},
                        {**self.answer,'action':{'kind':'filter_crops','class_ids':[True]}},
@@ -107,6 +114,19 @@ class GeminiTests(unittest.TestCase):
         config=assistant.configuration(self.env)
         self.assertEqual(set(config),{'provider','model','configured'})
         self.assertNotIn('secret',json.dumps(config))
+
+    def test_luna_text_uses_responses_without_images_or_reasoning_overhead(self):
+        result={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':json.dumps(self.answer)}]}]}
+        env={'AI_PROVIDER':'openai','OPENAI_MODEL':'gpt-6-luna','OPENAI_API_KEY':'private-openai-secret'}
+        with patch.object(assistant,'provider_response',return_value=result) as provider:
+            answer=assistant.review_context('Como está a área?',{'evidence':[{'id':'observed'}]},env)
+        request=provider.call_args.args[0];body=json.loads(request.data)
+        self.assertEqual(body['model'],'gpt-6-luna')
+        self.assertEqual(body['reasoning'],{'effort':'none'})
+        self.assertIsInstance(body['input'],str)
+        self.assertEqual(body['text']['format']['schema'],assistant.SCHEMA)
+        self.assertEqual(answer['provider'],'OpenAI')
+        self.assertNotIn('private-openai-secret',request.full_url+request.data.decode())
 
     def test_municipal_context_uses_selected_cutoff_and_validates_city(self):
         key='a'*64
@@ -147,6 +167,23 @@ class GeminiTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'HTTP 503.*3 tentativas'):
                 assistant.provider_response(Request('https://example.com'),'Gemini')
             self.assertEqual(api.call_count,3)
+
+    def test_high_demand_is_classified_without_exposing_provider_body(self):
+        body=json.dumps({'error':{'status':'UNAVAILABLE','message':
+            'This model is currently experiencing high demand. private-gemini-secret'}}).encode()
+        errors=[HTTPError('https://example.com',503,'temporary',{},io.BytesIO(body)) for _ in range(3)]
+        with patch.object(assistant,'urlopen',side_effect=errors),patch.object(assistant.time,'sleep'),self.assertLogs('app.assistant',level='WARNING') as logs:
+            with self.assertRaisesRegex(ValueError,'alta demanda.*HTTP 503.*3 tentativas') as caught:
+                assistant.provider_response(Request('https://example.com'),'Gemini')
+        self.assertIn('model_high_demand',' '.join(logs.output))
+        self.assertNotIn('private-gemini-secret',' '.join(logs.output)+str(caught.exception))
+
+    def test_unexpected_error_body_keeps_generic_temporary_error(self):
+        for body in (b'[]',b'{"error":null}',b'{"error":{"status":"INTERNAL","message":"high demand"}}'):
+            errors=[HTTPError('https://example.com',503,'temporary',{},io.BytesIO(body)) for _ in range(3)]
+            with self.subTest(body=body),patch.object(assistant,'urlopen',side_effect=errors),patch.object(assistant.time,'sleep'),self.assertLogs('app.assistant',level='WARNING'):
+                with self.assertRaisesRegex(ValueError,'falha temporária'):
+                    assistant.provider_response(Request('https://example.com'),'Gemini')
 
     def test_invalid_credentials_are_not_retried(self):
         error=HTTPError('https://example.com',403,'denied',{},io.BytesIO(b'secret'))

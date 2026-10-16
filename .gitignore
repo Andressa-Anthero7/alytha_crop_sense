@@ -19,6 +19,10 @@ data/chart-*.png
 data/chart-review.json
 data/rasters/
 *.log
+web/collection-data.json
+web/collection-map.geojson
+local_backups/
+web/*.tmp
 
 # Editor e sistema
 .DS_Store

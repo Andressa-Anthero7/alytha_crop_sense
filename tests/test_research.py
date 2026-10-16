@@ -74,6 +74,12 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(metadata['areas'],3);self.assertEqual(metadata['events'],30)
         self.assertIn('GroupKFold',metadata['validation'])
         self.assertGreaterEqual(metadata['balanced_accuracy'],.8)
+        active_bytes=research.MODEL_PATH.read_bytes()
+        candidate=research.train(promote=False)
+        self.assertFalse(candidate['promoted'])
+        self.assertTrue(Path(candidate['model_path']).is_file())
+        self.assertEqual(research.MODEL_PATH.read_bytes(),active_bytes)
+        self.assertEqual(research.model_status()['model']['version'],metadata['version'])
         prediction=research.analyze(d['id'],end.isoformat())['model_prediction']
         self.assertEqual(prediction['stage'],'desenvolvimento');self.assertTrue(prediction['experimental'])
     def test_year_jobs_keep_partial_data_and_resume_cached_successes(self):

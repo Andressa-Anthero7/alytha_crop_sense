@@ -94,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('saved-history').addEventListener('change', event => {
     const record = savedAnalyses.find(item => item.id === Number(event.target.value));
     if (!record) return;
-    dateFrom.value = record.parameters.from; dateTo.value = record.parameters.to;
+    setObservationPeriod(record.parameters.from,record.parameters.to);
     if (record.kind === 'ndvi') {
       document.querySelector('#ndvi-panel .analysis-subtitle').textContent = 'Histórico da vegetação nesta área · leituras de até 5 dias. Partes sem boa visibilidade ficam fora do cálculo.';
       renderNdvi(record.result.points || []);
@@ -102,9 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setNdviStatus(`Histórico: ${record.source} · consulta em ${new Date(record.created_at).toLocaleString('pt-BR')}.`);
     } else {
       renderItems(record.result.features || []);
-      removeMapLayer(scenesLayer);
-      if (openMap) scenesLayer = L.geoJSON(record.result, { style: { color: '#b66a17', fillOpacity: 0 }, interactive: false }).addTo(map);
-      else { scenesLayer = new google.maps.Data({ map }); scenesLayer.addGeoJson(record.result); scenesLayer.setStyle({ strokeColor: '#b66a17', fillOpacity: 0, clickable: false }); }
+      renderSceneFootprints(record.result);
       document.getElementById('cloud').value = record.parameters.max_cloud;
       document.getElementById('cloud-value').textContent = `${record.parameters.max_cloud}%`;
     }

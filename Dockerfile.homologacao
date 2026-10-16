@@ -1,0 +1,13 @@
+FROM python:3.14-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements-homologacao.txt ./
+RUN pip install --no-cache-dir -r requirements-homologacao.txt
+COPY app ./app
+COPY web ./web
+COPY prompts ./prompts
+COPY run.py ./
+RUN useradd --uid 10001 --create-home alytha && mkdir -p /app/data && chown -R alytha:alytha /app
+USER alytha
+EXPOSE 8765
+CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "8765", "--no-workers"]

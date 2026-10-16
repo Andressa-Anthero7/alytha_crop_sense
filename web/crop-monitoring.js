@@ -24,19 +24,21 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
   function draw() {
     hideLayer();
-    if(!mapReady || !result?.geojson.features.length)return;
+    if(!mapReady || !result)return;
+    const collection={type:'FeatureCollection',features:[...result.geojson.features,...(result.progression?.geojson.features || [])]};
+    if(!collection.features.length)return;
     function popup(feature) {
       const text=document.createElement('p');
-      text.textContent=`${classes[feature.properties.signal].label} · ${ha(feature.properties.area_ha)}. Mudança na vegetação, sem confirmação de cultura ou manejo.`;
+      text.textContent=feature.properties.progression?progressionPopup(feature.properties):`${classes[feature.properties.signal].label} · ${ha(feature.properties.area_ha)}. Mudança na vegetação, sem confirmação de cultura ou manejo.`;
       return text;
     }
     if(openMap) {
-      layer=L.geoJSON(result.geojson,{style:feature=>({color:classes[feature.properties.signal].color,weight:2,fillOpacity:.35}),onEachFeature:(feature,polygon)=>polygon.bindPopup(popup(feature))}).addTo(map);
+      layer=L.geoJSON(collection,{style:feature=>({color:classes[feature.properties.signal].color,weight:feature.properties.progression?4:2,fillOpacity:.35}),onEachFeature:(feature,polygon)=>polygon.bindPopup(popup(feature))}).addTo(map);
     } else {
-      layer=new google.maps.Data({map});layer.addGeoJson(result.geojson);
+      layer=new google.maps.Data({map});layer.addGeoJson(collection);
       layer.setStyle(feature=>({strokeColor:classes[feature.getProperty('signal')].color,fillColor:classes[feature.getProperty('signal')].color,strokeWeight:2,fillOpacity:.35}));
       info=new google.maps.InfoWindow();
-      layer.addListener('click',event=>{info.setContent(popup({properties:{signal:event.feature.getProperty('signal'),area_ha:event.feature.getProperty('area_ha')}}));info.setPosition(event.latLng);info.open({map});});
+      layer.addListener('click',event=>{const properties={};event.feature.forEachProperty((value,key)=>properties[key]=value);info.setContent(popup({properties}));info.setPosition(event.latLng);info.open({map});});
     }
     el('hide-crop-monitoring').hidden=false;
     legendTitle.textContent='Mudanças · '+result.as_of.split('-').reverse().join('/');mapLegend.hidden=false;
@@ -45,11 +47,25 @@ document.addEventListener('DOMContentLoaded',()=>{
     result=report;draw();
     el('crop-monitoring-status').textContent=`Recorte acompanhado até ${report.as_of.split('-').reverse().join('/')} · ${report.status==='ready'?'leitura integrada disponível':'leitura parcial'}.`;
     const output=el('crop-monitoring-results');output.replaceChildren();
+    if(report.evolution_index) {
+      const index=report.evolution_index,heading=document.createElement('strong');heading.textContent=index.name;output.append(heading);
+      for(const score of Object.values(index.scores)) {
+        const card=document.createElement('div');card.className='evolution-score';
+        const title=document.createElement('p');title.textContent=`${score.label}: ${score.value===null?'dados insuficientes':score.value.toLocaleString('pt-BR')+' / 100 pontos · evidências '+score.level}`;card.append(title);
+        if(score.value!==null){const bar=document.createElement('progress');bar.max=100;bar.value=score.value;bar.setAttribute('aria-label',score.label);card.append(bar);}
+        const note=document.createElement('p');note.className='analysis-subtitle';note.textContent=`Fatores disponíveis: ${score.available_weight}/100 pontos possíveis. ${score.hypothesis}`;card.append(note);
+        const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Ver fatores e pesos';details.append(summary);
+        for(const factor of score.factors){const row=document.createElement('p');row.className='analysis-subtitle';row.textContent=`${factor.label}: ${factor.available?factor.points+'/'+factor.weight+' pontos':'não avaliado (peso '+factor.weight+')'}. ${factor.reason}`;details.append(row);}
+        card.append(details);output.append(card);
+      }
+      const note=document.createElement('p');note.className='analysis-subtitle';note.textContent=index.note;output.append(note);
+    }
     for(const [title,text] of [['O que mudou',report.what_changed],['Onde mudou',report.where_changed],['Prioridade',report.priority],['Próximo sinal',report.next_signal]]) {
       const heading=document.createElement('strong'),line=document.createElement('p');
       heading.textContent=title;line.textContent=text;line.className='analysis-subtitle';output.append(heading,line);
     }
     if(report.learned_profile) {const p=document.createElement('p');p.className='analysis-subtitle';p.textContent=report.learned_profile.reading;output.append(p);}
+    renderVegetationProgression(output,report.progression);
     const legend=document.createElement('div');legend.className='monitoring-legend';
     for(const value of Object.values(classes)) {const item=document.createElement('span');item.style.borderLeft='3px solid '+value.color;item.textContent=value.label;legend.append(item);}
     output.append(legend);
@@ -71,7 +87,10 @@ document.addEventListener('DOMContentLoaded',()=>{
       return;
     }
     if(job.status==='error')throw Error(job.error);
-    const report=await storageJson('/api/crop-monitoring',{dataset_id:datasetId,date,spatial_job_id:job.id});
+    const payload={dataset_id:datasetId,date,spatial_job_id:job.id};
+    const first=el('evolution-window-from').value,last=el('evolution-window-to').value;
+    if(first || last)payload.planting_window={from:first,to:last};
+    const report=await storageJson('/api/crop-monitoring',payload);
     if(current!==revision)return;
     render(report);busy=false;el('start-crop-monitoring').disabled=false;
     fitGeojson({type:'Feature',properties:{},geometry:report.geometry});
@@ -91,6 +110,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.addEventListener('alytha-history-ready',event=>{
     if(history?.id===event.detail.id) {history=event.detail;el('start-crop-monitoring').disabled=busy || !history.points.length;return;}
     clear();history=event.detail;
+    el('evolution-window-from').value='';el('evolution-window-to').value='';
     el('start-crop-monitoring').disabled=!history.points.length;
     el('crop-monitoring-scope').textContent=selectedArea?'Recorte do histórico carregado · não representa a cidade inteira.':'Recorte de referência do histórico · amostra, não município inteiro.';
     el('crop-monitoring-status').textContent='Atualize para juntar histórico, mudanças espaciais e padrões de vegetação.';

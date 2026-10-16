@@ -34,7 +34,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     generation++;request?.abort();request=null;hide();job=null;model=null;selectedDate='';
   }
   function hideCropLayer() {
-    if(layer && agriculturalLayer && mapReady)removeMapLayer(agriculturalLayer);
+    if(toggle.checked && layer && agriculturalLayer && mapReady)removeMapLayer(agriculturalLayer);
   }
   function updateLegend() {
     el('activity-map-date').textContent=`Avaliação em ${formatDate(selectedDate)} · soja histórica 2025`;
@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       amount.textContent=summary ? ha(key==='unknown'?summary.unknown_ha+summary.pending_ha:summary[key+'_ha']) : '';
       row.append(swatch,title,amount);el('activity-map-rows').append(row);
     }
-    el('activity-map-note').textContent=`Acompanhamento de ${model.processed}/${model.states.length} áreas. Cinza: acompanhamento insuficiente ou ainda não concluído. Áreas menores que 5 ha não aparecem nesta camada. As cores apoiam o monitoramento; ainda não confirmam a área plantada na safra atual.`;
+    el('activity-map-note').textContent=`Soja histórica 2025 cruzada com NDVI recente · ${model.processed}/${model.states.length} áreas. Bege: pouca vegetação nos três intervalos válidos recentes. Verde: vegetação em pelo menos um deles, não necessariamente na última imagem. Cinza: leitura insuficiente ou pendente. Não confirma solo vazio ou soja atual. Áreas menores que 5 ha não aparecem.`;
     legend.hidden=false;
   }
   function draw() {

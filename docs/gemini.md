@@ -1,5 +1,7 @@
 # Assistente Gemini
 
+Configuração operacional de 15/10/2026: o ambiente local passou a usar OpenAI `gpt-6-luna`, com envio direto de imagens implementado. Veja [análise visual com OpenAI](analise-visual-openai.md). As instruções abaixo descrevem a opção Gemini e a integração textual anterior.
+
 Quando há município selecionado, a leitura do raster usa somente a interseção do município com a área visível. A faixa de municípios vizinhos mostrada pelo enquadramento do notebook não amplia o volume de leitura nem reduz o detalhamento da cidade consultada.
 
 As camadas de culturas são preparadas em segundo plano: `POST /api/sources/mapbiomas/jobs` inicia ou retoma a consulta, e `GET /api/sources/mapbiomas/jobs/{id}` informa `loading`, `ready` com o resultado, ou `error`. Pedidos iguais compartilham o processamento e o resultado. O navegador verifica o andamento a cada 1,5 segundo, com limite de 15 segundos por conexão, sem interromper o processamento quando a leitura do mapa ultrapassa 90 segundos. Após desconexão, reenviar o pedido retoma a consulta. O acompanhamento da página tem limite de dez minutos; o trabalho no servidor continua e pode ser retomado. Há dois processadores e até oito consultas pendentes; trabalhos interrompidos por reinício do servidor são retomados no próximo acompanhamento. O endpoint síncrono anterior continua disponível para integrações locais.

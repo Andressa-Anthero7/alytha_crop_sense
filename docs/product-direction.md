@@ -2,6 +2,8 @@
 
 ## Objetivo
 
+A direção definida em 15/10/2026 é desenvolver a Alytha como IA conversacional de assistência e análise dos dados coletados e refinados pelo sistema, coordenando ferramentas e cruzando histórico, imagens, evolução espacial, janela de plantio, meteorologia e conhecimento agronômico. O [objetivo da IA analítica](objetivo-ia-analitica.md) registra os requisitos, as capacidades existentes e as integrações a construir.
+
 Construir uma ferramenta de análise por talhão que una delimitação espacial, imagens multitemporais, indicadores de vegetação e evidências revisáveis. A referência de produto é a experiência de mapear e acompanhar lavouras do SojaMaps; a aplicação Alytha também precisa ligar cada observação ao produtor, à safra e ao lote comercial correspondente.
 
 ## Etapas
@@ -21,6 +23,8 @@ Construir uma ferramenta de análise por talhão que una delimitação espacial,
 - **Serasa Crop Monitor:** adaptador futuro após contrato, documentação de API, sandbox e autorização comercial.
 
 ## Estado desta PoC
+
+> Esta seção registra uma etapa anterior. Em 13/10/2026 o produto já tem persistência local, fontes agrícolas, histórico, acompanhamento integrado e assistente. A preparação atual está em [MVP para parceiros](mvp-parceiros.md). As pendências agronômicas continuam relevantes.
 
 A página permite carregar um polígono individual e consultar o catálogo Sentinel-2. Há código para desenhar a evolução NDVI em intervalos de cinco dias quando houver credenciais OAuth CDSE no arquivo `.env` na raiz. A integração NDVI ainda precisa de validação real com credenciais. O processamento usa o Statistical API do Sentinel Hub; não existe persistência de análises. Ao executar a consulta, o polígono e o período são enviados ao Copernicus. O gráfico representa a média de NDVI dos pixels válidos, não produtividade estimada.
 

@@ -1,4 +1,5 @@
 # Opcional para descobrir áreas históricas MapBiomas.
+-r requirements-network.txt
 rasterio>=1.4,<2
 shapely>=2,<3
 numpy>=2,<3

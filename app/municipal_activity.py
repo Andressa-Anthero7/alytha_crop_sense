@@ -104,7 +104,7 @@ def build(job_id,params):
     while cursor<=end:
         cutoffs.append(min(cursor+timedelta(days=4),end));cursor+=timedelta(days=5)
     result={'id':job_id,'parameters':params,'status':'loading','phase':'mapping','processed':0,'total':0,'points':[],
-            'period':{'from':first.isoformat(),'to':end.isoformat()},'scope':'municipality','historical_year':2025,'source':'MapBiomas e Sentinel-2',
+            'period':{'from':first.isoformat(),'to':end.isoformat()},'scope':'municipality','historical_year':2025,'source':'MapBiomas e Sentinel-2','failure_count':0,'failures':[],
             'note':'Abrange o município selecionado. Hectares estimados em manchas de soja histórica, sem limites de talhões confirmados. Pouca vegetação não comprova terra parada.'}
     def persist():
         result['updated_at']=storage.now();storage.source_snapshot('municipal-activity:'+job_id,result)
@@ -124,7 +124,12 @@ def build(job_id,params):
                 with_points=inactive_soy.activity({'geojson':feature},end=end)
                 points=with_points['points']
                 status=with_points['summary']['status']
-            except Exception:
+            except Exception as exc:
+                from .collection_issues import failure
+                result['failure_count']+=1
+                issue=failure('Sentinel-2','atividade recente',exc)
+                issue['recorte_index']=result['processed']
+                result['failures'].append(issue)
                 points=[];status='unknown'
             for entry,cutoff in zip(result['points'],cutoffs):
                 available=[p for p in points if date.fromisoformat(p.get('activity_as_of',p['date']))<=cutoff]
@@ -135,6 +140,8 @@ def build(job_id,params):
             result['assessed_ha']+=hectares;result['processed']+=1;persist()
         result['status']='ready';result['phase']='complete';persist()
     except Exception as exc:
+        from .collection_issues import failure
+        result['issue']=failure('MapBiomas' if result.get('phase')=='mapping' else 'Sentinel-2',result.get('phase','coleta'),exc)
         result['status']='error'
         result['error']=str(exc) if isinstance(exc,(ValueError,ImportError)) else 'Não foi possível concluir a análise municipal. Tente novamente.'
         persist()

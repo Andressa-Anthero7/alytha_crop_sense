@@ -174,17 +174,19 @@ class StandaloneTests(unittest.TestCase):
         with patch.dict(os.environ, {"GOOGLE_MAPS_API_KEY": "override"}):
             self.assertEqual(web_app.read_map_config()["google_maps_api_key"], "override")
 
-    def test_missing_ndvi_credentials_returns_actionable_json(self):
+    def test_missing_ndvi_credentials_consults_local_base_without_remote_calls(self):
         self.env_file.unlink()
         geometry = json.loads((ROOT / "data" / "sample-field.geojson").read_text())
         request = Request(self.base + "/api/ndvi-series", data=json.dumps({
             "geojson": geometry, "from": "2026-10-01", "to": "2026-10-07"
         }).encode(), headers={"Content-Type": "application/json"})
-        with self.assertRaises(HTTPError) as caught:
-            urlopen(request)
-        self.assertEqual(caught.exception.code, 400)
-        self.assertIn("CDSE_CLIENT_ID", json.load(caught.exception)["error"])
-        caught.exception.close()
+        with patch.object(web_app, 'request_ndvi_series') as provider:
+            with urlopen(request) as response:
+                result=json.load(response)
+        provider.assert_not_called()
+        self.assertEqual(result['mode'],'local_cache')
+        self.assertEqual(result['status'],'unavailable')
+        self.assertIn('Não há leituras NDVI salvas',result['message'])
 
     def test_invalid_search_does_not_call_provider(self):
         request = Request(self.base + "/api/search", data=b'{"geojson":null}',

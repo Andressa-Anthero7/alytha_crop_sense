@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
@@ -41,15 +42,17 @@ def start_history(data):
     if type(first) is not int or type(last) is not int or not 2018<=first<=last<=inactive_soy.today().year: raise ValueError('Escolha anos entre 2018 e o ano atual.')
     from shapely.geometry import shape
     from shapely.ops import unary_union
-    boundary=municipalities.boundary('5107925')
+    code=data.get('municipality_code','5107925')
+    municipalities.key(code)
+    boundary=municipalities.boundary(code)
     region=unary_union([shape(f['geometry']) for f in boundary['features']])
     area=shape(geometry)
-    if not area.is_valid or area.is_empty or not region.buffer(1e-8).covers(area): raise ValueError('Neste piloto, selecione uma área dentro de Sorriso/MT.')
+    if not area.is_valid or area.is_empty or not region.buffer(1e-8).covers(area): raise ValueError('Selecione uma área dentro do município informado.')
     from .web_app import project_to_web_mercator,geometry_bbox
     bbox=geometry_bbox(project_to_web_mercator(geometry)); width=(bbox[2]-bbox[0])/10; height=(bbox[3]-bbox[1])/10
     if width>2500 or height>2500 or width*height>4_000_000: raise ValueError('Selecione uma área menor para reconstruir seu histórico em 10 m.')
     area_key=fingerprint(geometry)
-    params={'area_key':area_key,'geometry':geometry,'start_year':first,'end_year':last,'as_of':inactive_soy.today().isoformat(),'municipality_code':'5107925'}
+    params={'area_key':area_key,'geometry':geometry,'start_year':first,'end_year':last,'as_of':inactive_soy.today().isoformat(),'municipality_code':code}
     dataset_id=fingerprint(params)
     with LOCK:
         saved=storage.source_snapshot('history:'+dataset_id)
@@ -75,8 +78,9 @@ def build_history(dataset_id,params):
                 if not cached: storage.source_snapshot(cache_key,series)
                 result['points'].extend(series['points'])
                 result['years'].append({'year':year,'status':'ready','observations':len(series['points'])})
-            except Exception:
-                result['years'].append({'year':year,'status':'error','observations':0})
+            except Exception as exc:
+                from .collection_issues import failure
+                result['years'].append({'year':year,'status':'error','observations':0,'issue':failure('Sentinel-2','histórico anual',exc)})
             result['processed']+=1;persist()
         result['points'].sort(key=lambda p:p['date'])
         result['status']='partial' if any(y['status']=='error' for y in result['years']) else 'ready'
@@ -91,7 +95,8 @@ def windows(points,cutoff):
     for p in points:
         try:
             when=date.fromisoformat(p['date']);value=p['ndvi_mean']
-            if end-timedelta(days=90)<=when<=end and type(value) in (int,float) and math.isfinite(value) and -1<=value<=1 and p.get('valid_pixels',0)>=50 and p.get('valid_fraction',0)>=0.5: valid.append(p)
+            available=date.fromisoformat(p.get('available',p['date']))
+            if end-timedelta(days=90)<=when<=end and available<=end and type(value) in (int,float) and math.isfinite(value) and -1<=value<=1 and p.get('valid_pixels',0)>=50 and 0.5<=p.get('valid_fraction',0)<=1: valid.append(p)
         except (ValueError,TypeError,KeyError): continue
     return sorted({p['date']:p for p in valid}.values(),key=lambda p:p['date'])
 
@@ -126,11 +131,16 @@ def add_event(data):
     if last<first or first.year<history['parameters']['start_year'] or last>history_end: raise ValueError('Período de manejo fora do histórico.')
     stage=data.get('stage');note=data.get('note','')
     if stage not in STAGES or not isinstance(note,str) or not 3<=len(note.strip())<=500: raise ValueError('Informe etapa e referência de campo (3–500 caracteres).')
+    provenance=data.get('provenance',{})
+    if not isinstance(provenance,dict) or len(json.dumps(provenance))>3000:
+        raise ValueError('Origem do registro de campo inválida.')
+    provenance={**provenance,'origin':'human_field_record'}
     features(history['points'],last.isoformat())
     with storage.connect() as db:
         if db.execute('SELECT id FROM field_events WHERE area_key=? AND date_from<=? AND date_to>=?',(history['parameters']['area_key'],last.isoformat(),first.isoformat())).fetchone(): raise ValueError('Já existe registro de campo para esta área neste período. Evite rótulos sobrepostos.')
-        db.execute('INSERT INTO field_events(dataset_id,area_key,date_from,date_to,stage,note,created_at) VALUES(?,?,?,?,?,?,?)',(history['id'],history['parameters']['area_key'],first.isoformat(),last.isoformat(),stage,note.strip(),storage.now()))
-    return {'saved':True,'events':len(events())}
+        cursor=db.execute('INSERT INTO field_events(dataset_id,area_key,date_from,date_to,stage,note,created_at,provenance) VALUES(?,?,?,?,?,?,?,?)',(history['id'],history['parameters']['area_key'],first.isoformat(),last.isoformat(),stage,note.strip(),storage.now(),json.dumps(provenance)))
+        event_id=cursor.lastrowid
+    return {'saved':True,'events':len(events()),'event_id':event_id}
 
 def model_status():
     counts={stage:0 for stage in STAGES};records=events()
@@ -138,12 +148,12 @@ def model_status():
     saved=storage.source_snapshot('ml:model:v1')
     return {'events':len(records),'areas':len({r['area_key'] for r in records}),'class_counts':counts,'minimum_events':30,'minimum_areas':3,'model':saved['result'] if saved and MODEL_PATH.is_file() else None,'note':'Treinamento usa apenas registros informados de campo; resultados continuam experimentais.'}
 
-def train():
+def train(promote=True):
     if not TRAIN_LOCK.acquire(blocking=False): raise ValueError('Um treinamento já está em andamento.')
-    try: return _train()
+    try: return _train(promote=promote)
     finally: TRAIN_LOCK.release()
 
-def _train():
+def _train(promote=True):
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import GroupKFold,cross_val_predict
     from sklearn.metrics import balanced_accuracy_score,classification_report,confusion_matrix
@@ -160,8 +170,16 @@ def _train():
     metadata={'method':'RandomForest','status':'experimental','trained_at':storage.now(),'events':len(x),'areas':len(set(groups)),'classes':sorted(set(y)),'features':FEATURE_NAMES,'validation':'GroupKFold por área; o mesmo polígono não aparece em treino e teste do mesmo fold. Áreas sobrepostas distintas ainda precisam de revisão.','balanced_accuracy':float(balanced_accuracy_score(y,prediction)),'report':classification_report(y,prediction,output_dict=True,zero_division=0),'confusion_matrix':confusion_matrix(y,prediction,labels=sorted(set(y))).tolist(),'note':'Métricas de validação interna; validação externa de campo pendente. Probabilidades não calibradas.'}
     model.fit(x,y)
     MODEL_PATH.parent.mkdir(parents=True,exist_ok=True)
-    temporary=MODEL_PATH.with_suffix('.tmp');joblib.dump(model,temporary);temporary.replace(MODEL_PATH)
-    storage.source_snapshot('ml:model:v1',metadata)
+    version=uuid.uuid4().hex
+    destination=MODEL_PATH.parent/'versions'/f'manejo-{version}.joblib'
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    temporary=destination.with_suffix('.tmp');joblib.dump(model,temporary);temporary.replace(destination)
+    metadata.update(version=version,model_path=str(destination),promoted=promote)
+    if promote:
+        import shutil
+        temporary=MODEL_PATH.with_suffix('.tmp');shutil.copyfile(destination,temporary);temporary.replace(MODEL_PATH)
+    storage.source_snapshot('ml:model:v1' if promote else 'ml:candidate:v1',metadata)
+    storage.source_snapshot('ml:version:'+version,metadata)
     return metadata
 
 def analyze(dataset_id,cutoff=None):

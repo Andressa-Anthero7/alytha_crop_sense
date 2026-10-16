@@ -1,5 +1,31 @@
 # Alytha — monitoramento de lotes
 
+**Análises na conversa:** comparação histórica, direção em rasters locais, janela declarada, síntese de hipóteses, clima NASA POWER e pesquisa no portal Embrapa agora retornam trabalhos e evidências verificáveis. Veja [uso, fontes e limites](docs/analises-conversacionais.md).
+
+**Operação local:** há fila persistente para análises locais com worker separado, endpoint de saúde e backup/restauração verificáveis. Isolamento por produtor e migração dos coletores externos continuam pendentes. Veja [operação e preparação de homologação](docs/operacao-local.md).
+
+**Objetivo da IA:** a Alytha deve coordenar busca, processamento e análise conversacional, cruzando histórico, imagens Sentinel-1/2, evolução direcional, janela de plantio, meteorologia e referências agronômicas. Veja [objetivo, estado atual e sequência de implementação](docs/objetivo-ia-analitica.md).
+
+**Inventário local na conversa:** pergunte “Quais imagens temos salvas?” para conferir históricos, prévias e rasters disponíveis sem consultar o Sentinel ou um provedor de IA. Veja [uso, contrato de evidências e limitações](docs/inventario-local.md).
+
+**Banco e migrations:** `python -m app.migrate status` mostra as versões e `python -m app.migrate up` aplica as pendentes. O servidor inicializa o esquema antes do atendimento e usa SQLite em WAL. Veja [correção de bloqueios, comandos e backup](docs/banco-migrations.md).
+
+**Aprendizado contínuo:** o histórico de cada área pode alimentar uma rotina persistente de releituras a cada cinco dias, revisão da Alytha, padrões de vegetação e validação com parceiros. Hipóteses automáticas ficam separadas dos rótulos humanos; novas versões supervisionadas são avaliadas como candidatas. Veja [funcionamento, ativação e limites](docs/aprendizado-continuo.md).
+
+**Base integrada:** todos os municípios da rodada, suas leituras, recortes e pendências são consolidados antes das análises da IA. A fila visual por recorte é controlada na página da coleta. Veja [arquivos, acompanhamento e revisão regional](docs/base-integrada.md).
+
+**Gemini nas imagens:** o fluxo visual envia PNGs reais de períodos diferentes, com cor natural quando disponível e mapas NDVI, junto das medições do recorte. Observações, hipóteses e verificações de campo ficam separadas; ausência de imagens ou erro do provedor permanece pendente. Veja [análise visual, rastreabilidade e validação real](docs/analise-visual-gemini.md).
+
+Para demonstrações guiadas aos produtores parceiros, veja o [roteiro de validação do MVP](docs/mvp-parceiros.md). Execute `python -m app.demo_check` para conferir dependências, configuração e resultados locais antes da reunião. O painel de validação permite revisar e exportar registros de campo por área.
+
+**Coleta regional:** digite uma cidade ou estado na busca do mapa para iniciar a coleta sistemática, com fila, cache e andamento em **Coleta automática da região**. O histórico de áreas agora aceita outros municípios, além de Sorriso. Veja [fontes, cobertura e limites](docs/coleta-regional.md).
+
+**Base Centro-Oeste:** a rodada de desenvolvimento cobre MT, MS, GO e DF. Acompanhe o relatório com `python -m app.regional_batch status`; veja [execução, arquivos e retomada](docs/base-centro-oeste.md).
+
+**Direção da vegetação:** a comparação espacial agora procura sequências de ganho/perda e mostra setas quando há organização espacial suficiente. Veja [método experimental e interpretação](docs/direcao-vegetacao.md).
+
+**Índice de evolução:** o acompanhamento combina fatores em duas pontuações de 0–100, para expansão e redução vegetal, com pesos e dados ausentes visíveis. Veja [método experimental do índice](docs/indice-evolucao.md).
+
 Aplicação local para carregar um talhão GeoJSON, consultar cenas Sentinel-2 e analisar vigor por NDVI. Requer **Python 3.10+**. O servidor e a consulta de catálogo usam apenas a biblioteca padrão; mapas e serviços externos precisam de internet.
 
 ## Rodar
@@ -10,9 +36,15 @@ python run.py
 
 Abra **http://127.0.0.1:8765**. Encerre com `Ctrl+C`. Para outra porta: `python run.py --port 8766`.
 
-O mapa inicia sem área de análise. No painel, selecione **estado → município** para navegar pelos limites do IBGE. Aproxime o mapa, clique em **Desenhar área**, marque pelo menos três vértices e clique em **Concluir desenho**. Depois selecione o período e use **Buscar imagens** ou **Calcular NDVI**. O limite municipal serve para navegação; a análise usa somente o polígono desenhado.
+O mapa inicia sem área de análise. Pesquise uma cidade ou estado para ver sugestões do IBGE enquanto digita, ou selecione **estado → município** no painel. Aproxime o mapa, clique na caneta e marque pelo menos três vértices. **Buscar imagens** e **Consultar vigor** concluem automaticamente um desenho válido; também é possível usar **Concluir desenho** ou um clique duplo. O limite municipal serve para navegação; a análise usa o polígono desenhado.
 
-Você também pode carregar um GeoJSON autorizado. Use `data/sample-field.geojson` como exemplo fictício para testar o upload. Áreas ainda não salvas ficam na sessão; **Limpar área** remove o desenho e os resultados da tela, sem apagar cadastros no banco. Um desenho em andamento pode ser cancelado sem apagar a área anterior.
+As linhas laranjas são os limites das cenas retornadas pelo catálogo, não limites de lavouras. Ficam ocultas por padrão e podem ser ligadas em **Limites das cenas** no mapa.
+
+Se o catálogo devolver HTML de bloqueio em vez de dados STAC, a busca tenta a alternativa GET. Contornos complexos usam uma envolvente compacta e filtram as cenas pela geometria original com Shapely; a área solicitada permanece a mesma. Consultas bem-sucedidas ficam salvas mesmo sem cadastro da área e podem ser reutilizadas durante indisponibilidade, sempre com o mesmo polígono, datas e limite de nuvens. A tela identifica o uso da base local. Listar cenas não baixa nem processa as imagens.
+
+O seletor **Período** oferece 1, 3, 6, 9 e 12 meses contados para trás a partir da data final, além de **Personalizado** com datas livres entre 01/01/2018 e hoje. Os intervalos podem atravessar anos e abranger todo o histórico disponível. Séries NDVI longas são consultadas por ano e reunidas no mesmo gráfico; cada trecho obtido fica salvo mesmo se a fonte recusar o seguinte. No painel de histórico, **Todo o histórico** mostra vários anos juntos. Os atalhos definem a extensão do período, mantendo as leituras de até cinco dias; não transformam os dados em médias mensais.
+
+Você também pode arrastar e soltar um GeoJSON sobre o mapa ou usar o botão de upload. Envie um arquivo `.geojson` ou `.json` de até 2 MB, com um único Polygon ou MultiPolygon. O contorno aparece no mapa e fica pronto para consultar imagens e vigor; arquivos inválidos preservam a área anterior. Use `data/sample-field.geojson` como exemplo fictício para testar. Áreas ainda não salvas ficam na sessão; **Limpar área** remove o desenho e os resultados da tela, sem apagar cadastros no banco. Um desenho em andamento pode ser cancelado sem apagar a área anterior.
 
 ## Salvar áreas e consultas
 
@@ -20,11 +52,15 @@ Depois de desenhar ou carregar um polígono, preencha **nome, município/UF, cul
 
 As consultas de cenas e séries NDVI feitas **depois de salvar** são registradas automaticamente com seus parâmetros, resultados e data UTC. Selecione uma área em **Áreas salvas** para reabrir o polígono e, em **Consultas anteriores**, escolha um resultado. Reabrir um resultado salvo não consome uma nova consulta Copernicus. O PNG NDVI continua sendo calculado sob demanda e não é armazenado nesta entrega.
 
+**Consultar vigor** também salva as séries bem-sucedidas de desenhos ainda não cadastrados, com sua geometria e período, para reuso local. Sem credenciais ou quando o Copernicus recusa a consulta, a aplicação procura séries da mesma área. Com as dependências geoespaciais instaladas, pode oferecer até 20 recortes salvos inteiramente dentro do desenho, identificados como amostras e destacados em roxo; suas médias não são combinadas nem extrapoladas para toda a área. Datas sem observações permanecem sem leitura. Se houver somente datas antigas, **Consultar datas salvas** ajusta explicitamente o período. Após HTTP 401/403/429, novas tentativas externas por esse botão ficam suspensas por 15 minutos; a base local continua disponível.
+
 Após duas séries NDVI, **Comparar séries NDVI** mostra as médias dos intervalos e sua diferença. Essa comparação é descritiva: períodos e cobertura podem diferir e a média não representa produtividade. **Exportar histórico** baixa o cadastro e seus resultados em JSON. A cultura e a safra são declarações do usuário, não classificações automáticas.
 
-O cadastro salvo mantém a geometria original; um novo desenho exige um novo cadastro. Consultas feitas antes do cadastro não entram retroativamente no histórico. O armazenamento é local e compartilhado por quem acessa esse servidor; esta entrega ainda não tem login ou separação por usuário. Para preservar o banco, inclua `data/monitoring.sqlite3` no backup com o servidor parado.
+O cadastro salvo mantém a geometria original; um novo desenho exige um novo cadastro. Consultas feitas antes do cadastro não entram retroativamente no histórico. O armazenamento é local e compartilhado por quem acessa esse servidor; esta entrega ainda não tem login ou separação por usuário. Para preservar o banco, use backup consistente do SQLite ou, com todos os processos parados, preserve o arquivo principal e seus auxiliares presentes. Veja [orientação de backup em WAL](docs/banco-migrations.md).
 
-As listas e malhas simplificadas vêm das APIs oficiais de [Localidades](https://servicodados.ibge.gov.br/api/docs/localidades) e [Malhas do IBGE](https://servicodados.ibge.gov.br/api/docs/malhas?versao=3), com cache em memória no servidor. A seleção territorial não identifica automaticamente lavouras.
+As listas e malhas simplificadas vêm das APIs oficiais de [Localidades](https://servicodados.ibge.gov.br/api/docs/localidades) e [Malhas do IBGE](https://servicodados.ibge.gov.br/api/docs/malhas?versao=3), com cache persistente no SQLite. A seleção territorial não identifica automaticamente lavouras.
+
+Para consultas IBGE com a validação nativa de certificados do Windows, instale `python -m pip install -r requirements-network.txt`. O cliente usa `truststore` quando disponível, mantendo a verificação de certificado e hostname. Listas de estados, municípios e respostas de malhas também ficam no SQLite por sete dias e podem ser reutilizadas durante indisponibilidade da fonte; não é preciso consultar novamente todos os municípios em cada reinício.
 
 ## Estrutura
 
@@ -51,7 +87,7 @@ Copy-Item .env.example .env
 | --- | --- | --- |
 | `GOOGLE_MAPS_API_KEY` | Google Maps e busca por endereço | Não |
 | `GOOGLE_MAPS_MAP_ID` | Identificador opcional do mapa Google | Não |
-| `CDSE_CLIENT_ID` e `CDSE_CLIENT_SECRET` | Série e camada NDVI via Copernicus | Apenas para NDVI |
+| `CDSE_CLIENT_ID` e `CDSE_CLIENT_SECRET` | Novas séries e camadas NDVI via Copernicus | Apenas para novas consultas externas |
 | `GEE_PROJECT_ID` | Script opcional de autenticação Earth Engine | Não |
 | `OPENAI_API_KEY` | Assistente de perguntas baseado nas evidências do servidor | Apenas para o assistente |
 | `OPENAI_MODEL` | Modelo do assistente; padrão `gpt-4.1-mini` | Não |
@@ -131,3 +167,9 @@ Para Sorriso, `python -m app.ml_dataset` exporta as leituras já coletadas e as 
 ## Visão espacial: cv2 + ML
 
 O painel **Manchas de pouca vegetação · visão espacial** compara os mesmos pixels em três janelas de imagens Copernicus, desenha manchas persistentes de pelo menos 1 ha no mapa e exporta características espaciais para exploração com ML. Analisa o recorte selecionado ou a referência de Sorriso, sem representar a cidade inteira. Instale `requirements-cv.txt`. Método, uso e limites em [docs/cv2-ml.md](docs/cv2-ml.md); meta registrada em [docs/meta-cv2-ml.md](docs/meta-cv2-ml.md).
+
+## Condições para plantio de soja
+
+No painel de camadas, **Condições para plantio · soja** avalia clima recente, previsão de sete dias, temperatura e umidade estimadas do solo, além do NDVI já salvo do mesmo recorte. A consulta meteorológica usa Open-Meteo e não inicia coleta de imagens. Verificações de solo, drenagem, fertilidade, calendário e ZARC são declarações do usuário. Dados ausentes ou antigos impedem um resultado favorável; a triagem não é laudo de aptidão. Fontes, critérios, limites e testes em [docs/condicoes-plantio.md](docs/condicoes-plantio.md).
+
+O painel **Ciclo da soja · estudo e planejamento** apresenta 22 temas, do planejamento à pós-colheita, com referências, possibilidades de acompanhamento e dados de campo necessários. É uma trilha de pesquisa, não um classificador automático da etapa atual. A [matriz inicial](docs/ciclo-soja-estudo.md) e a [rodada de 16/10/2026](docs/rodada-2026-10-16-soja.md) detalham o plano de integrar Sentinel-1 e janela oficial e desenvolver validação por etapa. O quadro foi ampliado para IA-29 a IA-31, preservando entregas anteriores.

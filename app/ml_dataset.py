@@ -83,7 +83,7 @@ def export_dataset(code='5107925',output_root=None):
               'supervised_training_ready':False,
               'note':'Base observacional para exploração e preparação de ML. Não representa comparação entre safras. Sinais automáticos não são rótulos confirmados de manejo. Prontidão para treino supervisionado exige revisão dos rótulos e validação espacial/temporal independente.'}
     (folder/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
-    (folder/'LEIA-ME.md').write_text('''# Base piloto de Sorriso
+    (folder/'LEIA-ME.md').write_text('''# Base municipal de leituras por satélite
 
 `observacoes.csv`: leituras reais do satélite e qualidade das imagens.
 `janelas_ml.csv`: características de vegetação calculadas somente com imagens disponíveis até a data indicada. Janelas sem leituras suficientes são excluídas.
